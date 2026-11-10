@@ -2,12 +2,14 @@ import { Game, H, W } from "./game/game.ts";
 
 /**
  * 진입점: 720x1280 논리 화면을 창에 맞춰 늘리고(비율 유지), 화면 밀도(devicePixelRatio)만큼 선명하게 그린다.
- * 디버그: ?autoplay=1 (봇 자동 플레이), ?time=5 (시작 시간 초)
+ * 디버그: ?autoplay=1 (봇 자동 플레이), ?time=5 (시작 시간 초), ?debug=1 (자동 확인 스크립트용으로 window.__game 공개)
  */
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const g = canvas.getContext("2d")!;
 const params = new URLSearchParams(location.search);
 const game = new Game({ autoplay: params.has("autoplay"), time: Number(params.get("time")) || undefined });
+// 디버그 주소일 때만 콘솔/자동 확인 스크립트에서 게임을 만질 수 있게 연다.
+if (params.has("autoplay") || params.has("debug")) (window as unknown as { __game: Game }).__game = game;
 
 let scale = 1;
 function resize(): void {

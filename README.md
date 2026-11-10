@@ -2,7 +2,9 @@
 
 60초 콤보 퍼즐 게임 **Shatter Stamp**의 웹(TypeScript + Canvas 2D) 버전.
 Godot 버전(`D:\Godot\ShatterStamp`, https://github.com/HermitCho/ShatterStamp)과 규칙·수치가 같고,
-엔진 없이 만들어 첫 로딩이 가볍다 (JS 약 13KB gzip + 한글 폰트 서브셋 약 120KB, Godot 웹 빌드는 약 10MB).
+엔진 없이 만들어 첫 로딩이 가볍다 (JS 약 26KB gzip + 한글 폰트 서브셋 약 140KB, Godot 웹 빌드는 약 10MB).
+
+**플레이:** https://hermitcho.github.io/ShatterStamp-Web/
 
 ## 실행
 
@@ -14,7 +16,9 @@ npm test           # 핵심 로직 테스트 (node --test, Node 22.18+)
 npm run sim        # 봇 밸런스 시뮬레이션 (-- --runs=30 --base=1000 --growth=90)
 ```
 
-디버그 주소 옵션: `?autoplay=1` (봇 자동 플레이), `?time=5` (시작 시간 초)
+디버그 주소 옵션: `?autoplay=1` (봇 자동 플레이), `?time=5` (시작 시간 초), `?debug=1` (자동 확인용 `window.__game` 공개)
+
+`main`에 push하면 GitHub Actions가 테스트 → 빌드 → GitHub Pages 배포를 한다(`.github/workflows/deploy.yml`).
 
 ## 구조
 
@@ -28,19 +32,28 @@ src/core/          화면과 분리된 순수 로직 (테스트·시뮬레이션
   rng.ts           시드 난수
 src/game/          화면
   game.ts          게임 흐름, HUD, 오른쪽 모양 줄, 판정 글자, 타격감
+  menus.ts         타이틀 / 게임 방법 / 설정 / 일시정지 / 결과 (캔버스 버튼·슬라이더, 키보드 이동)
+  howto.ts         게임 방법 그림 카드
+  draw.ts          글자 그리기 도우미
   board-view.ts    블록 그림·애니메이션, 번지는 파괴, 판정 색 미리보기
   fx.ts            파편·섬광·충격파·별
   audio.ts         Web Audio 효과음 합성
+  music.ts         배경 음악 합성(타이틀 / 게임 / 피버 층)
+  stage.ts         카운트다운, TIME UP, 피버 배지, 화면 가장자리 빛
+  title.ts         타이틀 로고 등장 연출과 배경
+  tutorial.ts      첫 판 튜토리얼 안내 상자와 표시
+  neon.ts          네온 글씨
+  tween.ts         작은 애니메이션 도구
   skin.ts, i18n.ts 네온 색, 한국어/영어 문구
-tests/core.test.ts
+tests/core.test.ts, tests/tween.test.ts
 tools/sim-balance.ts, tools/build-font.py
 ```
 
 ## 진행 상황
 
 - [x] 1단계: 핵심 로직 + 테스트 + 시뮬레이션, 플레이 화면(미리보기, 번지는 파괴, 콤보·피버, 홀드, 타격감, 효과음), 간단한 타이틀·결과
-- [ ] 2단계: 메뉴(타이틀 버튼, 게임 방법 카드, 설정, 일시정지), 언어 전환
-- [ ] 3단계: 튜토리얼, 카운트다운·피버·마지막 5초 연출, 배경 음악, 결과 화면 카운트업, 배포
+- [x] 2단계: 메뉴(타이틀 버튼, 게임 방법 카드, 설정 — 효과음·음악 볼륨·화면 흔들림·언어, 일시정지, 결과 버튼), 키보드 이동(↑↓ Enter Esc ←→)
+- [x] 3단계: 첫 판 튜토리얼(최고 자리만 받기, 건너뛰기), 3·2·1·GO!, 피버 배지·불꽃·가장자리 빛·FEVER END, 마지막 5초 경고, TIME UP, 타이틀 로고·배경 연출, 배경 음악 3곡(Web Audio 합성), 결과 카운트업, GitHub Pages 배포
 
 ## 글꼴
 

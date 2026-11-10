@@ -73,11 +73,22 @@ export class Tweens {
     return s;
   }
 
+  /**
+   * 돌리는 도중 콜백이 새 Seq를 add()하거나 clear()해도 잃지 않게 한다.
+   * (돌리는 목록을 따로 떼어 두고, 그 사이 새로 들어온 것은 뒤에 붙인다. clear()되었으면 남은 것은 버린다.)
+   */
   update(dt: number): void {
-    this.list = this.list.filter((s) => !s.update(dt));
+    const running = this.list;
+    this.list = [];
+    const gen = this.gen;
+    const keep = running.filter((s) => !s.update(dt));
+    this.list = gen === this.gen ? keep.concat(this.list) : this.list;
   }
 
   clear(): void {
     this.list = [];
+    this.gen++;
   }
+
+  private gen = 0;
 }

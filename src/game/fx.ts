@@ -4,7 +4,7 @@ const GRAVITY = 1800;
 interface Part { x: number; y: number; vx: number; vy: number; t: number; max: number; s: number; c: string; r: number; rv: number }
 interface Flash { x: number; y: number; s: number; c: string; t: number; max: number }
 interface Ring { x: number; y: number; r: number; c: string; t: number; max: number }
-interface Star { x: number; y: number; vx: number; vy: number; t: number; max: number; s: number; c: string }
+interface Star { x: number; y: number; vx: number; vy: number; t: number; max: number; s: number; c: string; ember?: boolean }
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 
@@ -42,6 +42,11 @@ export class Fx {
     }
   }
 
+  /** 피버 불꽃: 화면 아래에서 천천히 떠오르며 흔들린다(별과 같은 목록을 쓰되 위로 뜬다). */
+  ember(x: number, y: number, c: string): void {
+    this.stars.push({ x, y, vx: rand(-30, 30), vy: -rand(260, 520), t: 0, max: rand(1.2, 2.2), s: rand(3, 7), c, ember: true });
+  }
+
   update(dt: number): void {
     for (const p of this.parts) {
       p.t += dt;
@@ -52,6 +57,12 @@ export class Fx {
     }
     for (const s of this.stars) {
       s.t += dt;
+      if (s.ember) {
+        s.vx += Math.sin(s.t * 6 + s.max * 10) * 120 * dt;
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+        continue;
+      }
       s.vx *= 1 - 3 * dt;
       s.vy = s.vy * (1 - 3 * dt) + 60 * dt;
       s.x += s.vx * dt;

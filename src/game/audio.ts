@@ -18,6 +18,10 @@ const DEFS: Record<string, [number, number, number, number, number, Wave]> = {
   perfect: [0.35, 880, 1760, 0, 9, 0],
   bonus: [0.3, 600, 1200, 0, 8, 2],
   sparkle: [0.25, 2400, 3200, 0, 14, 0],
+  count: [0.16, 660, 660, 0, 14, 2],
+  go: [0.45, 990, 1320, 0, 5, 1],
+  warn: [0.09, 1250, 1000, 0, 30, 1],
+  fever_end: [0.55, 900, 220, 0, 4.5, 1],
 };
 
 export type SoundName = keyof typeof DEFS;
@@ -27,6 +31,11 @@ export class Sfx {
   private out: GainNode | null = null;
   private buffers = new Map<string, AudioBuffer>();
   volume = 0.8;
+
+  /** 배경 음악도 같은 AudioContext를 쓴다(unlock 뒤에만 있음). */
+  get context(): AudioContext | null {
+    return this.ctx;
+  }
 
   /** 첫 사용자 입력에서 부른다. 이미 열려 있으면 아무것도 안 한다. */
   unlock(): void {
