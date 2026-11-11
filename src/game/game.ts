@@ -1,11 +1,14 @@
 import { bestMove } from "../core/bot.ts";
 import { GAME_TIME, GameRules, Grade, STAMP_COOLDOWN, tierFor, type BreakResult } from "../core/game-rules.ts";
+import { BOARD_COLORS, BOARD_COLS, BOARD_ROWS, localSeed, newBoard, newQueue, REPLAY_VERSION, type ReplayEvent } from "../core/replay.ts";
 import { ShapeQueue } from "../core/shape-queue.ts";
 import type { Cell, Shape } from "../core/shapes.ts";
 import { Sfx } from "./audio.ts";
 import { BoardView, CELL, BLOCK, roundRect, type BreakEvent } from "./board-view.ts";
 import { Fx } from "./fx.ts";
 import { Menus } from "./menus.ts";
+import { askNickname } from "./nick-input.ts";
+import { createOnline, type RunTicket } from "./online.ts";
 import { Music } from "./music.ts";
 import { StageFx } from "./stage.ts";
 import { TitleScreen } from "./title.ts";
@@ -17,7 +20,9 @@ import { ease, Tweens } from "./tween.ts";
 
 export const W = 720;
 export const H = 1280;
-const COLS = 8, ROWS = 9, COLORS = 5;
+const COLS = BOARD_COLS, ROWS = BOARD_ROWS, COLORS = BOARD_COLORS;
+/** 받아 둔 판 표(시드)를 이 시간이 지나면 버리고 새로 받는다(서버는 6시간 뒤 만료) */
+const TICKET_MAX_AGE = 3 * 3600 * 1000;
 const BOARD_X = 24, BOARD_Y = 400, BOARD_SCALE = 0.8;
 const SIDE_X = 552, SIDE_W = 148;
 const NEXT_COUNT = 4;
@@ -90,6 +95,22 @@ export class Game {
   private gate = false;
   /** 대기 화면을 깨운 탭이 손을 뗄 때 메뉴 버튼으로 눌리지 않게 한 번 무시한다. */
   private swallowUp = false;
+  /** 온라인 랭킹 (로그인·점수 등록·TOP 10) */
+  private readonly online = createOnline();
+  /** 랭킹 목록 요청 번호: 늦게 도착한 옛 응답을 버린다 */
+  private rankReq = 0;
+  /** Google 로그인에서 돌아왔으면 메뉴를 열 때 랭킹 화면부터 보여 준다 */
+  private openRankingNext = false;
+  /** 다음 판에 쓸 서버 표(시드). 판을 시작할 때 꺼내 쓴다. */
+  private nextTicket: RunTicket | null = null;
+  private ticketLoading = false;
+  /** 지금 판의 표. 없으면(손님·연결 실패) 랭킹에 올리지 않는다. */
+  private ticket: RunTicket | null = null;
+  /** 지금 판의 찍기·홀드 기록(서버가 다시 돌려 점수를 계산한다). 튜토리얼을 거쳤으면 그 기록도 따로 둔다. */
+  private log: ReplayEvent[] = [];
+  private tutLog: ReplayEvent[] | null = null;
+  /** 지금 판의 시드 (자동 확인 스크립트가 리플레이를 다시 돌려 볼 때 읽는다) */
+  seed = 0;
   readonly menus: Menus;
   private readonly stage = new StageFx();
   private readonly title = new TitleScreen();
@@ -145,6 +166,15 @@ export class Game {
       },
       sound: (name, pitch = 1, db = 0) => this.sfx.play(name, pitch, db),
       shake: (p) => (this.trauma = Math.min(1, this.trauma + p)),
+      rankRefresh: () => void this.refreshRanking(),
+      rankLogin: () => void this.online.signIn(),
+      rankLogout: () => void this.online.signOut(),
+      rankNickname: () => this.editNickname(),
+    });
+    this.menus.rank.status = this.online.configured ? "ready" : "off";
+    this.online.onChange = () => this.onOnlineChange();
+    void this.online.init().catch(() => {
+      /* 연결 실패해도 게임은 그대로 */
     });
     this.menus.best = this.best;
     this.applySettings(this.menus.settings);
@@ -176,6 +206,7 @@ export class Game {
     else this.menus.open("title");
     this.title.playIntro();
     this.music.playTitle();
+    this.prepareRun();
   }
 
   /**
@@ -187,11 +218,141 @@ export class Game {
     if (!this.gate) return;
     this.gate = false;
     this.swallowUp = fromCanvas;
-    this.menus.open("title");
+    if (this.openRankingNext) {
+      this.openRankingNext = false;
+      this.menus.openRanking();
+    } else this.menus.open("title");
     // 로고가 찍히는 소리·흔들림을 음악과 함께 다시 들려준다(처음 등장 때는 소리를 낼 수 없었다)
     this.sfx.play("big", 1.1, -4);
     this.sfx.play("break", 0.8, -6);
     this.trauma = Math.min(1, this.trauma + 0.35);
+  }
+
+  // ---------------------------------------------------------------- 온라인 랭킹
+
+  private onOnlineChange(): void {
+    const nick = this.online.nickname;
+    // 다른 계정이거나 로그아웃했으면 받아 둔 표는 쓸 수 없다
+    if (nick !== this.menus.rank.nickname) this.nextTicket = null;
+    this.menus.rank.nickname = nick;
+    let afterLogin = false;
+    try {
+      afterLogin = sessionStorage.getItem("ss.afterLogin") === "1";
+      if (afterLogin && nick !== null) sessionStorage.removeItem("ss.afterLogin");
+    } catch {
+      /* 없어도 진행 */
+    }
+    if (afterLogin && nick !== null) {
+      // 로그인에서 막 돌아옴: 대기 화면을 넘기면 랭킹부터, 이미 메뉴면 바로 랭킹으로
+      if (this.gate) this.openRankingNext = true;
+      else if (this.state === "title") this.menus.openRanking();
+    }
+    if (nick === "") this.editNickname();
+    if (this.menus.current === "ranking") void this.refreshRanking();
+    this.prepareRun();
+  }
+
+  private async refreshRanking(): Promise<void> {
+    const rv = this.menus.rank;
+    if (!this.online.configured) {
+      rv.status = "off";
+      return;
+    }
+    const req = ++this.rankReq;
+    rv.status = "loading";
+    try {
+      const [list, mine] = await Promise.all([
+        rv.mode === "all" ? this.online.leaderboard() : this.online.myTop(),
+        this.online.myRank(),
+      ]);
+      if (req !== this.rankReq) return;
+      if (rv.mode === "all") rv.all = list as typeof rv.all;
+      else rv.mine = list as typeof rv.mine;
+      rv.myRank = mine;
+      rv.status = "ready";
+    } catch {
+      if (req === this.rankReq) rv.status = "error";
+    }
+  }
+
+  /** 닉네임 입력 창 (로그인 직후 자동으로, 또는 랭킹 화면의 닉네임 줄에서). 취소하면 나중에 정할 수 있다. */
+  private editNickname(): void {
+    if (this.online.nickname === null) return;
+    askNickname(
+      this.online.nickname,
+      (name) => this.online.setNickname(name),
+      () => {
+        if (this.menus.current === "ranking") void this.refreshRanking();
+      },
+    );
+  }
+
+  /** 랭킹에 올릴 수 있는 판인지: 자동 플레이, 시간을 바꾼 판, 콘솔 조작 훅(?debug=1)을 연 판은 올리지 않는다 */
+  private rankable(): boolean {
+    const debug = new URLSearchParams(location.search).has("debug");
+    return !this.autoplay && this.startTime === GAME_TIME && !debug && this.online.configured;
+  }
+
+  private record(e: ReplayEvent): void {
+    if (this.state === "tutorial") this.tutLog?.push(e);
+    else this.log.push(e);
+  }
+
+  /**
+   * 다음 판의 서버 표(시드)를 미리 받아 둔다. 판 도중에는 받지 않는다
+   * (새 표를 받으면 서버가 이전 표를 무효로 하므로, 진행 중인 판의 기록을 못 올리게 된다).
+   */
+  private prepareRun(): void {
+    if (this.nextTicket || this.ticketLoading || !this.rankable() || !this.online.nickname) return;
+    if (this.state !== "title" && this.state !== "result") return;
+    this.ticketLoading = true;
+    const owner = this.online.nickname;
+    void this.online.startRun().then((tk) => {
+      this.ticketLoading = false;
+      if (this.online.nickname !== owner) return;
+      if (tk) this.nextTicket = tk;
+      // 너무 빨리 다시 요청해 거절됐을 수 있다: 잠시 뒤 한 번 더
+      else setTimeout(() => this.prepareRun(), 3000);
+    });
+  }
+
+  /** 판이 끝났을 때 랭킹 등록. 서버가 기록을 다시 돌려 계산한 점수만 올라간다. */
+  private submitScore(): void {
+    this.menus.resultRank = "";
+    if (!this.rankable()) return;
+    const nick = this.online.nickname;
+    if (nick === null) {
+      this.menus.resultRank = t("RESULT_RANK_GUEST");
+      return;
+    }
+    if (nick === "") {
+      this.menus.resultRank = t("RESULT_RANK_NICK");
+      return;
+    }
+    const tk = this.ticket;
+    this.ticket = null;
+    if (!tk) {
+      // 판을 시작할 때 서버 표를 못 받았다(연결 실패 등)
+      this.menus.resultRank = t("RESULT_RANK_UNRANKED");
+      this.prepareRun();
+      return;
+    }
+    const r = this.rules, run = this.run;
+    this.menus.resultRank = t("RESULT_RANK_SAVING");
+    const replay = { v: REPLAY_VERSION, tutorial: this.tutLog, events: this.log };
+    void this.online.submitRun({ run: tk.id, replay, score: r.score }).then((res) => {
+      // 기록을 올린 뒤에 다음 판 표를 받는다(먼저 받으면 이번 판 표가 무효가 된다)
+      this.prepareRun();
+      if (this.run !== run) return;
+      this.menus.resultRank = res.ok
+        ? res.rank ? t("RESULT_RANK_FMT", res.rank) : t("RESULT_RANK_SAVED")
+        : res.reason === "guest" ? t("RESULT_RANK_GUEST")
+        : res.reason === "nickname" ? t("RESULT_RANK_NICK")
+        : res.reason === "limit" ? t("RESULT_RANK_LIMIT")
+        : res.reason === "rejected" ? t("RESULT_RANK_REJECTED")
+        : res.reason === "outdated" ? t("RESULT_RANK_OUTDATED")
+        : res.reason === "off" ? "" : t("RESULT_RANK_FAIL");
+    });
   }
 
   private applySettings(s: { sfx: number; music: number; shake: boolean }): void {
@@ -254,8 +415,15 @@ export class Game {
     this.trauma = 0;
     this.rules.reset();
     this.rules.timeLeft = this.startTime;
-    this.board.setup(COLS, ROWS, COLORS);
-    this.queue = new ShapeQueue();
+    // 랭킹 판은 서버가 준 시드로 보드와 모양 순서를 만든다(서버가 같은 판을 다시 돌려 확인한다)
+    const tk = this.nextTicket && Date.now() - this.nextTicket.at < TICKET_MAX_AGE ? this.nextTicket : null;
+    this.nextTicket = null;
+    this.ticket = this.rankable() ? tk : null;
+    const seed = (this.seed = this.ticket?.seed ?? localSeed());
+    this.board.setModel(newBoard(seed));
+    this.queue = newQueue(seed);
+    this.log = [];
+    this.tutLog = null;
     this.held = null;
     this.holdUsed = false;
     this.stampLock = 0;
@@ -271,7 +439,10 @@ export class Game {
     this.music.playGame();
     const showTut = (!this.tutorialDone || this.forceTutorial) && !this.autoplay;
     this.forceTutorial = false;
-    if (showTut) this.beginTutorial();
+    if (showTut) {
+      this.tutLog = [];
+      this.beginTutorial();
+    }
     else this.beginCountdown();
   }
 
@@ -397,6 +568,7 @@ export class Game {
       grades: r.gradeCounts.slice(), time: Math.round(r.bonusTimeTotal), biggest: r.biggest,
     };
     this.menus.best = this.best;
+    this.submitScore();
     const run = this.run;
     this.tweens.add().wait(1.5).call(() => {
       if (this.run !== run || this.state !== "result") return;
@@ -426,6 +598,7 @@ export class Game {
       [this.held, this.current] = [this.current, this.held!];
     }
     this.holdUsed = true;
+    this.record(["h", this.state === "tutorial" ? 0 : this.rules.elapsed]);
     this.sfx.play("hold");
     this.refreshPieces();
     if (fromQueue) this.slideQueue();
@@ -460,7 +633,9 @@ export class Game {
     }
     const bestN = this.board.bestN;
     const ev = this.board.placeAt(c.x, c.y);
-    if (ev) this.onBroke(ev, bestN);
+    if (!ev) return;
+    this.record(["s", this.state === "tutorial" ? 0 : this.rules.elapsed, c.x, c.y]);
+    this.onBroke(ev, bestN);
   }
 
   private onBroke(ev: BreakEvent, bestN: number): void {

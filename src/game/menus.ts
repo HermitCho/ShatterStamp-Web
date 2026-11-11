@@ -5,6 +5,7 @@ import { getLang, GRADE_KEYS, setLang, t, type TextKey } from "./i18n.ts";
 import { StampMenu, type StampFootprint } from "./stamp-menu.ts";
 import { SKIN } from "./skin.ts";
 import { ease, Tweens } from "./tween.ts";
+import type { LeaderRow, MyRow } from "./online.ts";
 
 /**
  * 메뉴 화면: 타이틀 / 게임 방법 / 설정 / 일시정지 / 결과.
@@ -15,7 +16,19 @@ const W = 720;
 const BTN_W = 552;
 const BTN_X = (W - BTN_W) / 2;
 
-export type PanelId = "title" | "howto" | "settings" | "pause" | "result";
+export type PanelId = "title" | "howto" | "settings" | "pause" | "result" | "ranking";
+
+/** 랭킹 화면에 보일 내용. Game이 온라인 결과를 받아 채운다. */
+export interface RankView {
+  mode: "all" | "mine";
+  /** off: 연결 정보 없음 / loading / ready / error */
+  status: "off" | "loading" | "ready" | "error";
+  /** 로그인했으면 닉네임("" = 아직 안 정함), 안 했으면 null */
+  nickname: string | null;
+  all: LeaderRow[];
+  mine: MyRow[];
+  myRank: { rank: number; best: number } | null;
+}
 
 export interface Settings {
   sfx: number;
@@ -43,6 +56,11 @@ export interface MenuActions {
   click(): void;
   sound(name: "pop" | "big" | "perfect" | "tick", pitch?: number, db?: number): void;
   shake(power: number): void;
+  /** 랭킹 화면을 열거나 보기(전체/내 기록)를 바꿀 때: 목록을 새로 불러온다 */
+  rankRefresh(): void;
+  rankLogin(): void;
+  rankLogout(): void;
+  rankNickname(): void;
 }
 
 /** 결과 연출 진행 상태(값은 0~1 또는 지금 보이는 숫자) */
@@ -63,6 +81,12 @@ interface Button {
   label: () => string;
   primary?: boolean;
   value?: () => string;
+  /** true면 그리지도 고르지도 않는다(로그인 상태에 따라 바뀌는 버튼) */
+  hidden?: () => boolean;
+  x?: number;
+  width?: number;
+  small?: boolean;
+  tab?: () => boolean;
   onPress: () => void;
 }
 
@@ -105,6 +129,9 @@ export class Menus {
   current: PanelId | null = null;
   best = 0;
   result: ResultData | null = null;
+  /** 결과 화면 랭킹 한 줄 (Game이 등록 결과에 맞춰 바꾼다) */
+  resultRank = "";
+  readonly rank: RankView = { mode: "all", status: "off", nickname: null, all: [], mine: [], myRank: null };
   readonly settings: Settings;
   private panels: Record<PanelId, Panel>;
   private fade = 0;
@@ -133,10 +160,18 @@ export class Menus {
       title: {
         dim: 0,
         widgets: [
-          btn(606, "START", () => this.actions.start(), true),
-          btn(734, "HOW_TO_PLAY", () => this.open("howto")),
-          btn(846, "TUTORIAL_BTN", () => this.actions.tutorial()),
-          btn(958, "SETTINGS", () => this.openSettings("title")),
+          btn(596, "START", () => this.actions.start(), true),
+          btn(708, "RANKING", () => this.openRanking()),
+          btn(802, "HOW_TO_PLAY", () => this.open("howto")),
+          btn(896, "TUTORIAL_BTN", () => this.actions.tutorial()),
+          btn(990, "SETTINGS", () => this.openSettings("title")),
+          {
+            // 로그인했으면 메뉴 아래에 내 닉네임과 '닉네임 변경'
+            kind: "button", y: 1134, small: true,
+            label: () => this.rank.nickname ? t("TITLE_NICK_FMT", this.rank.nickname) : t("NICK_TITLE"),
+            onPress: () => this.actions.rankNickname(),
+            hidden: () => this.rank.status === "off" || this.rank.nickname === null,
+          },
         ],
         draw: (g) => this.drawTitle(g),
       },
@@ -190,6 +225,33 @@ export class Menus {
           text(g, t("PAUSE_META"), W / 2, 1030, 27, SKIN.muted, "center");
         },
       },
+      ranking: {
+        dim: 0.94,
+        widgets: [
+          {
+            kind: "button", y: 176, x: 222, width: 276, label: () => t("RANK_TAB_ALL"),
+            tab: () => this.rank.mode === "all", onPress: () => this.rankTab("all"),
+          },
+          {
+            kind: "button", y: 176, x: 498, width: 276, label: () => t("RANK_TAB_MINE"),
+            tab: () => this.rank.mode === "mine", onPress: () => this.rankTab("mine"),
+          },
+          {
+            kind: "button", y: 960, label: () => t("RANK_LOGIN"), onPress: () => this.actions.rankLogin(),
+            hidden: () => this.rank.status === "off" || this.rank.nickname !== null,
+          },
+          {
+            kind: "button", y: 920, label: () => t("RANK_NICK"), value: () => this.rank.nickname || t("RANK_NICK_UNSET"),
+            onPress: () => this.actions.rankNickname(), hidden: () => this.rank.nickname === null,
+          },
+          {
+            kind: "button", y: 1010, label: () => t("RANK_LOGOUT"), onPress: () => this.actions.rankLogout(),
+            hidden: () => this.rank.nickname === null,
+          },
+          btn(1130, "BACK", () => this.open("title"), true),
+        ],
+        draw: (g) => this.drawRanking(g),
+      },
       result: {
         dim: 0.86,
         widgets: [btn(1030, "RETRY", () => this.actions.restart(), true), btn(1140, "TITLE", () => this.actions.toTitle())],
@@ -220,6 +282,18 @@ export class Menus {
     this.current = null;
   }
 
+  private rankTab(mode: "all" | "mine"): void {
+    if (this.rank.mode === mode) return;
+    this.rank.mode = mode;
+    this.actions.rankRefresh();
+  }
+
+  openRanking(): void {
+    this.rank.mode = "all";
+    this.open("ranking");
+    this.actions.rankRefresh();
+  }
+
   private openSettings(back: PanelId): void {
     this.settingsBack = back;
     this.open("settings");
@@ -227,13 +301,13 @@ export class Menus {
 
   /** Esc / 뒤로 가기 */
   back(): void {
-    if (this.current === "howto") this.open("title");
+    if (this.current === "howto" || this.current === "ranking") this.open("title");
     else if (this.current === "settings") this.open(this.settingsBack);
     else if (this.current === "pause") this.actions.resume();
   }
 
   private get widgets(): Widget[] {
-    return this.current ? this.panels[this.current].widgets : [];
+    return this.current ? this.panels[this.current].widgets.filter((w) => !(w.kind === "button" && w.hidden?.())) : [];
   }
 
   /** Keyboard input takes over from hover; an untouched option selects its primary action. */
@@ -369,7 +443,7 @@ export class Menus {
     g.globalAlpha *= btnA;
     if (btnA < 1) g.translate(0, 24 * (1 - btnA));
     this.look.drawSelection(g);
-    p.widgets.forEach((w, i) => {
+    this.widgets.forEach((w, i) => {
       if (w.kind === "button") this.look.button(g, w, i, i === this.selected);
       else this.look.slider(g, w.label(), w.y, w.get(), i, i === this.selected);
     });
@@ -466,6 +540,43 @@ export class Menus {
     an.rows.forEach((row, i) => Object.assign(row, { a: 1, dx: 0, values: targets[i].slice() }));
   }
 
+  private drawRanking(g: CanvasRenderingContext2D): void {
+    const rv = this.rank, look = this.look;
+    look.heading(g, t("RANKING"), 112);
+    text(g, t(rv.mode === "all" ? "RANK_SUB" : "RANK_SUB_MINE"), W / 2, 330, 24, SKIN.muted, "center");
+    const top = 384, step = 50;
+    const message = (key: TextKey) => look.lettering(g, t(key), W / 2, 620, 28, 560, SKIN.muted, "center", false);
+    if (rv.status === "off") message("RANK_OFF");
+    else if (rv.status === "loading") message("RANK_LOADING");
+    else if (rv.status === "error") message("RANK_ERROR");
+    else if (rv.mode === "all") {
+      if (!rv.all.length) message("RANK_EMPTY");
+      rv.all.forEach((r, i) => {
+        const y = top + i * step, col = r.mine ? SKIN.accent : i < 3 ? SKIN.timeText : SKIN.text;
+        look.lettering(g, String(r.rank), 112, y, i < 3 ? 34 : 28, 60, i < 3 ? SKIN.timeText : SKIN.muted, "center", i < 3);
+        fitText(g, r.nickname, 160, y, 28, 250, col, "left");
+        fitText(g, t("RANK_ROW_COMBO", r.maxCombo), 452, y, 19, 100, SKIN.muted, "right");
+        look.lettering(g, r.score.toLocaleString(), 636, y, 30, 170, r.mine ? SKIN.accent : SKIN.score, "right", r.mine || i < 3);
+      });
+    } else {
+      if (rv.nickname === null) message("RANK_GUEST");
+      else if (!rv.mine.length) message("RANK_NO_SCORE");
+      rv.mine.forEach((r, i) => {
+        const y = top + i * step;
+        look.lettering(g, String(i + 1), 112, y, i === 0 ? 34 : 28, 60, i === 0 ? SKIN.timeText : SKIN.muted, "center", i === 0);
+        fitText(g, `${r.at.getMonth() + 1}/${r.at.getDate()}`, 160, y, 24, 110, SKIN.muted, "left");
+        fitText(g, t("RANK_ROW_COMBO", r.maxCombo), 452, y, 19, 120, SKIN.muted, "right");
+        look.lettering(g, r.score.toLocaleString(), 636, y, 30, 200, i === 0 ? SKIN.accent : SKIN.score, "right", i === 0);
+      });
+    }
+    // 아래: 내 순위 또는 로그인 안내
+    if (rv.status !== "off") {
+      const line = rv.nickname === null ? t("RANK_GUEST")
+        : rv.myRank ? t("RANK_MY_FMT", rv.myRank.rank, rv.myRank.best.toLocaleString()) : t("RANK_NO_SCORE");
+      look.lettering(g, line, W / 2, 900, 24, 600, rv.myRank ? SKIN.timeText : SKIN.muted, "center", !!rv.myRank);
+    }
+  }
+
   private drawResult(g: CanvasRenderingContext2D): void {
     const r = this.result, an = this.anim, look = this.look;
     if (!r || !an) return;
@@ -481,6 +592,7 @@ export class Menus {
     g.restore();
     g.save(); g.globalAlpha *= an.best;
     look.lettering(g, r.newBest ? t("NEW_BEST") : t("BEST_FMT", r.best.toLocaleString()), 360, 492, 28, 560, SKIN.timeText);
+    if (this.resultRank) look.lettering(g, this.resultRank, 360, 536, 22, 560, SKIN.accent, "center", false);
     g.restore();
     const statX = [176, 0, 360, 544];
     an.rows.forEach((row, i) => {

@@ -61,6 +61,23 @@
         touch-action: none;
         box-shadow: 0 0 80px #11051a66;
       }
+      /* 개인정보처리방침·약관 링크: 게임 화면 아래 여백에 작게 */
+      .legal {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 3px;
+        text-align: center;
+        font: 11px/1.4 system-ui, sans-serif;
+        pointer-events: none;
+      }
+      .legal a {
+        color: #a5a4be99;
+        text-decoration: none;
+        pointer-events: auto;
+        padding: 2px 4px;
+      }
+      .legal a:hover { color: #e6e8f5; }
       @media (min-width: 900px) and (min-height: 600px) {
         canvas {
           border-radius: 24px;
@@ -77,6 +94,7 @@
   </head>
   <body>
     <canvas id="game"></canvas>
+    <nav class="legal"><a href="./privacy.html">개인정보처리방침</a>·<a href="./terms.html">이용약관</a></nav>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

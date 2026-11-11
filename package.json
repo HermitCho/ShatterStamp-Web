@@ -9,11 +9,16 @@
     "preview": "vite preview",
     "test": "node --test tests/*.test.ts",
     "sim": "node tools/sim-balance.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sync:edge": "node tools/sync-edge.ts",
+    "deploy:edge": "node tools/sync-edge.ts && npx supabase@latest functions deploy submit-run --remote=brydmjqtutbgphkzsocl --no-verify-jwt --use-api"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
     "typescript": "7.0.2",
     "vite": "8.3.7"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.119.0"
   }
 }

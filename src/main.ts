@@ -2,14 +2,14 @@ import { Game, H, W } from "./game/game.ts";
 
 /**
  * 진입점: 720x1280 논리 화면을 창에 맞춰 늘리고(비율 유지), 화면 밀도(devicePixelRatio)만큼 선명하게 그린다.
- * 디버그: ?autoplay=1 (봇 자동 플레이), ?time=5 (시작 시간 초), ?debug=1 (자동 확인 스크립트용으로 window.__game 공개)
+ * 디버그: ?autoplay=1 (봇 자동 플레이), ?time=5 (시작 시간 초), ?debug=1 (자동 확인 스크립트용으로 window.__game 공개, 랭킹 등록 안 함), ?rankmock=1|in (가짜 랭킹 서버)
  */
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const g = canvas.getContext("2d")!;
 const params = new URLSearchParams(location.search);
 const game = new Game({ autoplay: params.has("autoplay"), time: Number(params.get("time")) || undefined });
 // 디버그 주소일 때만 콘솔/자동 확인 스크립트에서 게임을 만질 수 있게 연다.
-if (params.has("autoplay") || params.has("debug")) (window as unknown as { __game: Game }).__game = game;
+if (params.has("autoplay") || params.has("debug") || params.has("rankmock")) (window as unknown as { __game: Game }).__game = game;
 
 let scale = 1;
 function resize(): void {
@@ -46,6 +46,8 @@ window.addEventListener("pointerdown", (e) => {
 });
 window.addEventListener("keydown", (e) => {
   if (e.repeat) return;
+  // 닉네임 입력칸에 글자를 칠 때는 게임 조작으로 받지 않는다
+  if (e.target instanceof HTMLInputElement) return;
   if (e.code === "Space") e.preventDefault();
   game.key(e.code);
 });

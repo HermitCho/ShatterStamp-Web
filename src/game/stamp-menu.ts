@@ -7,6 +7,13 @@ interface Action {
   label: () => string;
   value?: () => string;
   primary?: boolean;
+  /** 가로 위치·폭을 정해 나란히 놓는 항목(탭)에 쓴다. 없으면 가운데. */
+  x?: number;
+  width?: number;
+  /** 작은 글씨 항목(타이틀 아래 닉네임 줄) */
+  small?: boolean;
+  /** 탭이면: 지금 보고 있는 탭인지 */
+  tab?: () => boolean;
 }
 
 export interface StampFootprint {
@@ -48,9 +55,9 @@ export class StampMenu {
 
   buttonFootprint(b: Action): StampFootprint {
     return {
-      x: 360, y: b.y + 46,
-      width: b.value ? ROW_WIDTH : Math.min(540, Math.max(300,
-        this.width(b.label(), b.primary ? PRIMARY_SIZE : 35, b.primary ? 900 : 700) + 100)),
+      x: b.x ?? 360, y: b.y + 46,
+      width: b.width ?? (b.value ? ROW_WIDTH : Math.min(540, Math.max(b.small ? 240 : 300,
+        this.width(b.label(), b.primary ? PRIMARY_SIZE : b.small ? 26 : 35, b.primary ? 900 : 700) + 100))),
     };
   }
 
@@ -194,8 +201,20 @@ export class StampMenu {
     } else if (b.value) {
       this.lettering(g, b.label(), -276, 11, 30, 342, active ? SKIN.accent : SKIN.muted, "left", active);
       this.lettering(g, b.value(), 276, 11, 32, 160, active ? SKIN.accent : this.color(i), "right", active);
+    } else if (b.tab) {
+      // 탭: 보고 있는 탭은 하늘색 글자 + 빛나는 굵은 밑줄, 아닌 탭은 흐린 글자
+      const on = b.tab(), size = 38 * Math.min(1, (f.width - 40) / Math.max(1, this.width(b.label(), 38, 900)));
+      this.lettering(g, b.label(), 0, 12, size, f.width - 40, on || active ? SKIN.accent : SKIN.muted, "center", on);
+      if (on) {
+        const w = Math.min(f.width - 60, this.width(b.label(), size, 900) + 24);
+        g.save();
+        g.fillStyle = SKIN.accent; g.shadowColor = SKIN.accent; g.shadowBlur = 14;
+        roundRect(g, -w / 2, 26, w, 6, 3); g.fill();
+        g.restore();
+      }
     } else {
-      const size = 35 * Math.min(1, (f.width - 100) / Math.max(1, this.width(b.label(), 35, 700)));
+      const base = b.small ? 26 : 35;
+      const size = base * Math.min(1, (f.width - 100) / Math.max(1, this.width(b.label(), base, 700)));
       g.font = font(size, 700); g.textAlign = "center"; g.textBaseline = "alphabetic";
       g.fillStyle = active ? SKIN.accent : SKIN.text;
       g.fillText(b.label(), 0, 13);
