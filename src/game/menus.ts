@@ -282,8 +282,12 @@ export class Menus {
     if (!this.current) return false;
     if (this.drag) this.slide(this.drag, x, y);
     else {
-      this.hover = this.hit(x, y);
-      if (this.hover >= 0) this.focus = -1;
+      // 항목 사이 빈 곳에서는 도장을 마지막 항목에 그대로 둔다(기본 버튼으로 튀어 오르지 않게)
+      const i = this.hit(x, y);
+      if (i >= 0) {
+        this.hover = i;
+        this.focus = -1;
+      }
     }
     return true;
   }
@@ -292,7 +296,8 @@ export class Menus {
     if (!this.current) return false;
     if (this.drag) {
       this.drag = null;
-      this.hover = this.hit(x, y);
+      const i = this.hit(x, y);
+      if (i >= 0) this.hover = i;
       return true;
     }
     const i = this.hit(x, y);
