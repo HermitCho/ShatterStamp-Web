@@ -32,6 +32,8 @@ const TUT_TOTAL = 4;
 
 /** 상단 가운데 일시정지 버튼 */
 const PAUSE_BTN = { x: 318, y: 52, w: 84, h: 84 };
+/** 이어하기 뒤 다시 멈출 수 있기까지의 시간(초). 멈춤·이어하기를 반복해 생각할 시간을 버는 꼼수를 줄인다. */
+const PAUSE_LOCK = 3;
 
 interface Rect { x: number; y: number; w: number; h: number }
 
@@ -73,7 +75,12 @@ export class Game {
   private held: Shape | null = null;
   private holdUsed = false;
   private stampLock = 0;
-  private best = 0;
+  /** 이 기기에서 낸 최고 점수(손님일 때 보여 준다) */
+  private localBest = 0;
+  /** 로그인한 계정의 최고 점수(서버 기록). 로그인 안 했거나 아직 못 받았으면 null */
+  private accountBest: number | null = null;
+  /** 이어하기 뒤 다시 멈출 수 있을 때까지 남은 시간(초) */
+  private pauseLock = 0;
   private trauma = 0;
   private hitstop = 0;
   private flash = { color: "#ffffff", a: 0 };
@@ -136,9 +143,9 @@ export class Game {
     this.autoplay = !!opts.autoplay;
     if (opts.time) this.startTime = opts.time;
     try {
-      this.best = Number(localStorage.getItem("ss.best") ?? 0) || 0;
+      this.localBest = Number(localStorage.getItem("ss.best") ?? 0) || 0;
     } catch {
-      this.best = 0;
+      this.localBest = 0;
     }
     try {
       this.tutorialDone = localStorage.getItem("ss.tutorial") === "1";
@@ -199,6 +206,27 @@ export class Game {
     }
   }
 
+  /** 화면에 보여 줄 최고 점수: 로그인했으면 계정 기록, 아니면 이 기기 기록 */
+  private get best(): number {
+    return this.online.nickname !== null ? this.accountBest ?? 0 : this.localBest;
+  }
+
+  /** 계정 최고 점수를 서버에서 다시 받는다 */
+  private loadAccountBest(): void {
+    if (this.online.nickname === null) {
+      this.accountBest = null;
+      if (this.state !== "result") this.menus.best = this.best;
+      return;
+    }
+    void this.online.myRank().then((r) => {
+      if (this.online.nickname === null) return;
+      this.accountBest = r?.best ?? 0;
+      if (this.state !== "result") this.menus.best = this.best;
+    }).catch(() => {
+      /* 못 받으면 다음 기회에 */
+    });
+  }
+
   private openTitle(): void {
     this.state = "title";
     this.menus.best = this.best;
@@ -233,7 +261,12 @@ export class Game {
   private onOnlineChange(): void {
     const nick = this.online.nickname;
     // 다른 계정이거나 로그아웃했으면 받아 둔 표는 쓸 수 없다
-    if (nick !== this.menus.rank.nickname) this.nextTicket = null;
+    if (nick !== this.menus.rank.nickname) {
+      this.nextTicket = null;
+      // 로그인·로그아웃·계정이 바뀌면 최고 점수도 그 계정 것으로
+      this.accountBest = null;
+      this.loadAccountBest();
+    }
     this.menus.rank.nickname = nick;
     let afterLogin = false;
     try {
@@ -340,9 +373,17 @@ export class Game {
     const r = this.rules, run = this.run;
     this.menus.resultRank = t("RESULT_RANK_SAVING");
     const replay = { v: REPLAY_VERSION, tutorial: this.tutLog, events: this.log };
+    // 계정 최고 점수는 서버 확인 전에 먼저 반영하고, 등록 결과(서버 계산)로 바로잡는다
+    const before = this.accountBest;
+    if (this.accountBest !== null && r.score > this.accountBest) this.accountBest = r.score;
     void this.online.submitRun({ run: tk.id, replay, score: r.score }).then((res) => {
       // 기록을 올린 뒤에 다음 판 표를 받는다(먼저 받으면 이번 판 표가 무효가 된다)
       this.prepareRun();
+      if (this.online.nickname !== null) {
+        if (res.ok && res.best != null) this.accountBest = res.best;
+        else if (!res.ok) this.accountBest = before;
+        if (this.state !== "result") this.menus.best = this.best;
+      }
       if (this.run !== run) return;
       this.menus.resultRank = res.ok
         ? res.rank ? t("RESULT_RANK_FMT", res.rank) : t("RESULT_RANK_SAVED")
@@ -370,6 +411,11 @@ export class Game {
 
   private pause(): void {
     if (this.state !== "play") return;
+    if (this.pauseLock > 0) {
+      // 이어한 직후에는 잠깐 다시 멈출 수 없다
+      this.sfx.play("tick", 0.6, -8);
+      return;
+    }
     this.state = "pause";
     this.pressing = false;
     this.board.setAnchor(null);
@@ -378,12 +424,14 @@ export class Game {
     this.music.setPaused(true);
   }
 
+  /** 이어하기: 바로 시작하지 않고 3, 2, 1, GO! 뒤에 시간이 다시 흐른다. 그 뒤 잠깐은 다시 멈출 수 없다. */
   private resume(): void {
     if (this.state !== "pause") return;
     this.menus.close();
-    this.state = "play";
     this.music.setPaused(false);
     this.music.setFever(this.inFever);
+    this.pauseLock = PAUSE_LOCK;
+    this.beginCountdown();
   }
 
   private toTitle(): void {
@@ -427,6 +475,7 @@ export class Game {
     this.held = null;
     this.holdUsed = false;
     this.stampLock = 0;
+    this.pauseLock = 0;
     this.perfectStreak = 0;
     this.inFever = false;
     this.board.fever = false;
@@ -555,10 +604,10 @@ export class Game {
     this.trauma = Math.min(1, this.trauma + 0.5);
     const r = this.rules;
     const newBest = r.score > this.best && !this.autoplay;
-    if (newBest) {
-      this.best = r.score;
+    if (r.score > this.localBest && !this.autoplay) {
+      this.localBest = r.score;
       try {
-        localStorage.setItem("ss.best", String(this.best));
+        localStorage.setItem("ss.best", String(this.localBest));
       } catch {
         /* 저장 못 해도 진행 */
       }
@@ -920,6 +969,7 @@ export class Game {
       this.now.cooldown = this.stampLock / STAMP_COOLDOWN;
     }
     if (this.state !== "play") return;
+    if (this.pauseLock > 0) this.pauseLock = Math.max(0, this.pauseLock - realDt);
     if (this.rules.tick(dt)) this.breakCombo();
     if (this.stampLock > 0) this.stampLock = Math.max(0, this.stampLock - dt);
     this.now.cooldown = this.stampLock / STAMP_COOLDOWN;
@@ -1001,7 +1051,7 @@ export class Game {
       g.fillRect(0, 0, W, H);
       g.globalAlpha = 1;
     }
-    if (this.state === "play") this.drawPauseButton(g);
+    if (this.state === "play" || (this.state === "countdown" && this.pauseLock > 0)) this.drawPauseButton(g);
     this.menus.draw(g);
   }
 
@@ -1147,9 +1197,27 @@ export class Game {
 
   private drawPauseButton(g: CanvasRenderingContext2D): void {
     const b = PAUSE_BTN;
+    const locked = this.state === "countdown" || this.pauseLock > 0;
+    g.save();
+    if (locked) g.globalAlpha *= 0.4;
     panel(g, b.x, b.y, b.w, b.h, SKIN.panelBorder, 24);
     g.fillStyle = SKIN.text;
     g.fillRect(b.x + 31, b.y + 28, 8, 28);
     g.fillRect(b.x + 45, b.y + 28, 8, 28);
+    g.restore();
+    // 다시 멈출 수 있을 때까지 남은 시간: 버튼 둘레를 따라 차오르는 빛
+    if (this.state === "play" && this.pauseLock > 0) {
+      const k = 1 - this.pauseLock / PAUSE_LOCK;
+      g.save();
+      g.strokeStyle = SKIN.accent;
+      g.lineWidth = 4;
+      g.lineCap = "round";
+      g.shadowColor = SKIN.accent;
+      g.shadowBlur = 10;
+      g.beginPath();
+      g.arc(b.x + b.w / 2, b.y + b.h / 2, b.w / 2 + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
+      g.stroke();
+      g.restore();
+    }
   }
 }

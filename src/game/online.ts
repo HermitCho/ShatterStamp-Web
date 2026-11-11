@@ -39,7 +39,7 @@ export interface RunSubmit {
 }
 
 export type SubmitResult =
-  | { ok: true; rank: number | null }
+  | { ok: true; rank: number | null; best?: number | null }
   | { ok: false; reason: "guest" | "nickname" | "error" | "off" | "limit" | "rejected" | "outdated" };
 
 export interface Online {
@@ -200,9 +200,9 @@ class SupabaseOnline implements Online {
       const db = await this.db();
       // 서버 함수가 로그인 토큰으로 누구인지 정하고, 표의 시드로 판을 다시 돌려 점수를 직접 계산한다
       const { data, error } = await db.functions.invoke("submit-run", { body: s });
-      const res = data as { status?: string; rank?: number | null } | null;
+      const res = data as { status?: string; rank?: number | null; best?: number | null } | null;
       if (error || !res?.status) return { ok: false, reason: "error" };
-      if (res.status === "ok") return { ok: true, rank: res.rank == null ? null : Number(res.rank) };
+      if (res.status === "ok") return { ok: true, rank: res.rank == null ? null : Number(res.rank), best: res.best == null ? null : Number(res.best) };
       const reason = res.status === "signed_out" ? "guest" : res.status === "no_profile" ? "nickname"
         : res.status === "daily_limit" ? "limit" : res.status === "version" ? "outdated"
         : res.status === "rejected" ? "rejected" : "error";
@@ -310,7 +310,8 @@ class MockOnline implements Online {
     const sim = (this.lastSim = simulateRun(seed, s.replay));
     if (!sim.ok) return { ok: false, reason: sim.reason === "version" ? "outdated" : "rejected" };
     this.mine.push({ score: sim.score, maxCombo: sim.maxCombo, at: new Date() });
-    return { ok: true, rank: (await this.myRank())?.rank ?? null };
+    const me = await this.myRank();
+    return { ok: true, rank: me?.rank ?? null, best: me?.best ?? null };
   }
 
   async leaderboard(): Promise<LeaderRow[]> {
