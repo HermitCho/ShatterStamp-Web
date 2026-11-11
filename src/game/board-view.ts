@@ -1,6 +1,7 @@
 import { BoardModel } from "../core/board-model.ts";
 import { bestMove } from "../core/bot.ts";
-import { Grade, GRADE_NAMES, gradeFor } from "../core/game-rules.ts";
+import { Grade, gradeFor } from "../core/game-rules.ts";
+import { GRADE_KEYS, t } from "./i18n.ts";
 import type { Cell } from "../core/shapes.ts";
 import { alpha, font, mix, SKIN } from "./skin.ts";
 import { ease, Tweens, type Seq } from "./tween.ts";
@@ -75,16 +76,25 @@ export class BoardView {
   }
 
   setup(cols: number, rows: number, colors: number, seed = 0): void {
-    this.model = new BoardModel(cols, rows, colors, seed);
-    this.model.fillInitial();
+    const model = new BoardModel(cols, rows, colors, seed);
+    model.fillInitial();
+    this.setModel(model);
+  }
+
+  /** Load a board into the real renderer; illustrations can skip the entrance. */
+  setModel(model: BoardModel, animate = true): void {
+    this.model = model;
+    const { cols, rows } = model;
     this.tweens.clear();
     this.dying = [];
     this.blocks = [];
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
         const b = new BlockEnt(this.model.get(x, y), (x + 0.5) * CELL, (y + 0.5) * CELL);
-        b.sx = b.sy = 0;
-        b.seq = this.tweens.add().wait(0.025 * (x + y)).to(0.25, (k) => (b.sx = b.sy = k), ease.outBack);
+        if (animate) {
+          b.sx = b.sy = 0;
+          b.seq = this.tweens.add().wait(0.025 * (x + y)).to(0.25, (k) => (b.sx = b.sy = k), ease.outBack);
+        }
         this.blocks.push(b);
       }
     }
@@ -225,12 +235,12 @@ export class BoardView {
     g.stroke();
     if (this.fever) {
       // 테두리를 따라 색이 흐르는 피버 빛
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 2; i++) {
         const hue = ((this.feverT * 0.6 + i * 0.08) % 1) * 360;
-        const grow = 4 + i * 6 + 2 * Math.sin(this.feverT * 8);
+        const grow = 3 + i * 4 + Math.sin(this.feverT * 8);
         roundRect(g, -12 - grow, -12 - grow, w + 24 + grow * 2, h + 24 + grow * 2, 24);
-        g.strokeStyle = `hsla(${hue},100%,65%,${0.75 - i * 0.22})`;
-        g.lineWidth = 5 - i;
+        g.strokeStyle = `hsla(${hue},90%,70%,${0.5 - i * 0.25})`;
+        g.lineWidth = 2.5 - i;
         g.stroke();
       }
     }
@@ -288,11 +298,11 @@ export class BoardView {
   }
 
   private drawPill(g: CanvasRenderingContext2D, pv: Preview, col: string): void {
-    const countText = `+${pv.all.length}`;
-    const gradeText = GRADE_NAMES[pv.grade];
+    const countText = t("POINTS_FMT", pv.all.length);
+    const gradeText = t(GRADE_KEYS[pv.grade]);
     g.font = font(34);
     const cw = g.measureText(countText).width;
-    g.font = font(24);
+    g.font = font(28);
     const gw = g.measureText(gradeText).width;
     const w = cw + gw + 52, h = 54;
     let top = 99, bottom = -1, sumX = 0;
@@ -326,7 +336,7 @@ export class BoardView {
     g.fillStyle = "#fff";
     const x0 = cx - w / 2 + 20;
     g.fillText(countText, x0, y + 39);
-    g.font = font(24);
+    g.font = font(28);
     g.fillStyle = col;
     g.fillText(gradeText, x0 + cw + 12, y + 37);
     g.restore();
@@ -384,12 +394,15 @@ function blockSprite(color: number): HTMLCanvasElement {
   const col = SKIN.blocks[color];
   const half = BLOCK / 2 - 3;
   // 네온: 어두운 속 + 빛나는 테두리(바깥으로 번지는 빛)
-  g.shadowColor = alpha(col, 0.9);
-  g.shadowBlur = 14;
+  g.shadowColor = alpha(col, 0.6);
+  g.shadowBlur = 8;
   roundRect(g, -half, -half, half * 2, half * 2, 12);
-  g.fillStyle = alpha(mix(col, "#000000", 0.8), 0.95);
+  const fill = g.createLinearGradient(0, -half, 0, half);
+  fill.addColorStop(0, mix(col, "#090715", 0.76));
+  fill.addColorStop(1, mix(col, "#090715", 0.9));
+  g.fillStyle = fill;
   g.fill();
-  g.lineWidth = 3;
+  g.lineWidth = 2.5;
   g.strokeStyle = col;
   g.stroke();
   g.shadowBlur = 0;

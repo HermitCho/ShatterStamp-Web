@@ -16,7 +16,7 @@
       html, body {
         margin: 0;
         height: 100%;
-        background: #08050f;
+        background: #090715;
         overflow: hidden;
         overscroll-behavior: none;
       }
@@ -27,10 +27,51 @@
         -webkit-user-select: none;
         user-select: none;
         -webkit-tap-highlight-color: transparent;
+        isolation: isolate;
+        background:
+          radial-gradient(ellipse at 14% 28%, #14263788, transparent 45%),
+          radial-gradient(ellipse at 86% 62%, #46204466, transparent 46%),
+          linear-gradient(150deg, #0c0a1a, #090715 60%, #170d24);
+      }
+      body::before, body::after {
+        content: "";
+        position: fixed;
+        pointer-events: none;
+        z-index: -1;
+      }
+      body::before {
+        inset: 55% -50% -70%;
+        background-image:
+          linear-gradient(#57d6f21c 1px, transparent 1px),
+          linear-gradient(90deg, #57d6f21c 1px, transparent 1px);
+        background-size: 80px 80px;
+        transform: perspective(500px) rotateX(58deg);
+        transform-origin: center top;
+        mask-image: linear-gradient(transparent, black 40%, transparent 90%);
+      }
+      body::after {
+        inset: 0;
+        background:
+          linear-gradient(115deg, transparent 20%, #61efff07 20.1%, transparent 20.2%),
+          linear-gradient(65deg, transparent 80%, #ff70dd0b 80.1%, transparent 80.2%),
+          radial-gradient(ellipse at center, transparent 25%, #06040d88 100%);
       }
       canvas {
         display: block;
         touch-action: none;
+        box-shadow: 0 0 80px #11051a66;
+      }
+      @media (min-width: 900px) and (min-height: 600px) {
+        canvas {
+          border-radius: 24px;
+          box-shadow:
+            0 0 0 1px #a68ac738,
+            0 0 0 8px #12101ee6,
+            0 0 0 9px #705b812e,
+            -35px 0 110px #31d9ee0e,
+            35px 0 110px #ef44ca12,
+            0 26px 80px #0009;
+        }
       }
     </style>
   </head>

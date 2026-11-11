@@ -1,18 +1,18 @@
 import { roundRect } from "./board-view.ts";
-import { text } from "./draw.ts";
-import { drawCard } from "./howto.ts";
-import { getLang, setLang, t, type TextKey } from "./i18n.ts";
-import { alpha, font, mix, SKIN } from "./skin.ts";
+import { fitText, menuBackdrop, text } from "./draw.ts";
+import { Howto } from "./howto.ts";
+import { getLang, GRADE_KEYS, setLang, t, type TextKey } from "./i18n.ts";
+import { StampMenu, type StampFootprint } from "./stamp-menu.ts";
+import { SKIN } from "./skin.ts";
 import { ease, Tweens } from "./tween.ts";
-import { GRADE_NAMES } from "../core/game-rules.ts";
 
 /**
  * 메뉴 화면: 타이틀 / 게임 방법 / 설정 / 일시정지 / 결과.
  * 캔버스에 직접 그리는 작은 위젯(버튼, 슬라이더)과 키보드 이동(↑↓ Tab, Enter, Esc, ←→ 슬라이더)을 갖는다.
  * 버튼을 누르면 콜백만 부르고, 실제 흐름은 Game이 처리한다.
  */
-const W = 720, H = 1280;
-const BTN_W = 420, BTN_H = 92;
+const W = 720;
+const BTN_W = 552;
 const BTN_X = (W - BTN_W) / 2;
 
 export type PanelId = "title" | "howto" | "settings" | "pause" | "result";
@@ -49,12 +49,10 @@ export interface MenuActions {
 interface ResultAnim {
   running: boolean;
   title: number;
-  titleScale: number;
   score: number;
   scoreA: number;
   scoreScale: number;
   best: number;
-  bestScale: number;
   rows: { a: number; dx: number; values: number[] }[];
   buttons: number;
 }
@@ -64,8 +62,8 @@ interface Button {
   y: number;
   label: () => string;
   primary?: boolean;
+  value?: () => string;
   onPress: () => void;
-  press: number;
 }
 
 interface Slider {
@@ -114,17 +112,18 @@ export class Menus {
   private hover = -1;
   private drag: Slider | null = null;
   private settingsBack: PanelId = "title";
-  private clock = 0;
 
   private actions: MenuActions;
   private tweens = new Tweens();
   private anim: ResultAnim | null = null;
+  private readonly look = new StampMenu();
+  private readonly howto = new Howto();
 
   constructor(actions: MenuActions) {
     this.actions = actions;
     this.settings = loadSettings();
     const btn = (y: number, key: TextKey, onPress: () => void, primary = false): Button => ({
-      kind: "button", y, label: () => t(key), onPress, primary, press: 0,
+      kind: "button", y, label: () => t(key), onPress, primary,
     });
     const changed = () => {
       saveSettings(this.settings);
@@ -134,46 +133,66 @@ export class Menus {
       title: {
         dim: 0,
         widgets: [
-          btn(664, "START", () => this.actions.start(), true),
-          btn(768, "HOW_TO_PLAY", () => this.open("howto")),
-          btn(872, "TUTORIAL_BTN", () => this.actions.tutorial()),
-          btn(976, "SETTINGS", () => this.openSettings("title")),
+          btn(606, "START", () => this.actions.start(), true),
+          btn(734, "HOW_TO_PLAY", () => this.open("howto")),
+          btn(846, "TUTORIAL_BTN", () => this.actions.tutorial()),
+          btn(958, "SETTINGS", () => this.openSettings("title")),
         ],
         draw: (g) => this.drawTitle(g),
       },
       howto: {
         dim: 0.94,
-        widgets: [btn(1090, "BACK", () => this.open("title"), true)],
+        widgets: [btn(1168, "BACK", () => this.open("title"), true)],
         draw: (g) => {
           heading(g, t("HOW_TO_PLAY"));
-          for (let i = 0; i < 3; i++) drawCard(g, i as 0 | 1 | 2, 24, 280 + i * 250, W - 48, 232);
-          text(g, t("HOWTO_KEYS"), W / 2, 1066, 22, "rgba(235,250,255,0.6)", "center");
+          text(g, t("HOWTO_SUB"), W / 2, 196, 28, SKIN.muted, "center");
+          this.howto.drawSection(g, 0, 60, 244, 600);
+          this.howto.drawSection(g, 1, 60, 676, 600);
+          this.howto.drawSection(g, 2, 60, 896, 600);
+          fitText(g, t("HOWTO_KEYS"), W / 2, 1120, 23, 624, SKIN.muted, "center");
         },
       },
       settings: {
         dim: 0.94,
         widgets: [
-          { kind: "slider", y: 420, label: () => t("SOUND_FMT", Math.round(this.settings.sfx * 100)), get: () => this.settings.sfx, set: (v) => { this.settings.sfx = v; changed(); } },
-          { kind: "slider", y: 570, label: () => t("MUSIC_FMT", Math.round(this.settings.music * 100)), get: () => this.settings.music, set: (v) => { this.settings.music = v; changed(); } },
-          { kind: "button", y: 660, label: () => t("SHAKE_FMT", t(this.settings.shake ? "ON" : "OFF")), press: 0, onPress: () => { this.settings.shake = !this.settings.shake; changed(); } },
-          { kind: "button", y: 772, label: () => t("LANGUAGE_FMT", t("LANG_NAME")), press: 0, onPress: () => setLang(getLang() === "ko" ? "en" : "ko") },
-          btn(1080, "BACK", () => this.open(this.settingsBack), true),
+          { kind: "slider", y: 400, label: () => t("SOUND"), get: () => this.settings.sfx, set: (v) => { this.settings.sfx = v; changed(); } },
+          { kind: "slider", y: 560, label: () => t("MUSIC"), get: () => this.settings.music, set: (v) => { this.settings.music = v; changed(); } },
+          { kind: "button", y: 714, label: () => t("SHAKE"), value: () => t(this.settings.shake ? "ON" : "OFF"), onPress: () => { this.settings.shake = !this.settings.shake; changed(); } },
+          { kind: "button", y: 826, label: () => t("LANGUAGE"), value: () => t("LANG_NAME"), onPress: () => setLang(getLang() === "ko" ? "en" : "ko") },
+          btn(1070, "BACK", () => this.open(this.settingsBack), true),
         ],
-        draw: (g) => heading(g, t("SETTINGS")),
+        draw: (g) => {
+          this.look.heading(g, t("SETTINGS"));
+          text(g, t("SETTINGS_SUB"), W / 2, 208, 28, SKIN.muted, "center");
+          this.look.lettering(g, t("AUDIO"), BTN_X, 276, 25, BTN_W, SKIN.accent, "left");
+          this.look.lettering(g, t("PREFERENCES"), BTN_X, 676, 25, BTN_W, SKIN.score, "left");
+        },
       },
       pause: {
         dim: 0.97, // 멈춘 채로 다음 자리를 계산하지 못하게 보드를 거의 가린다
         widgets: [
-          btn(440, "RESUME", () => this.actions.resume(), true),
-          btn(552, "RESTART", () => this.actions.restart()),
-          btn(664, "SETTINGS", () => this.openSettings("pause")),
-          btn(776, "TITLE", () => this.actions.toTitle()),
+          btn(508, "RESUME", () => this.actions.resume(), true),
+          btn(620, "RESTART", () => this.actions.restart()),
+          btn(732, "SETTINGS", () => this.openSettings("pause")),
+          btn(844, "TITLE", () => this.actions.toTitle()),
         ],
-        draw: (g) => heading(g, t("PAUSED")),
+        draw: (g) => {
+          g.save(); g.translate(360, 228); g.rotate(-0.055);
+          g.fillStyle = SKIN.score;
+          g.shadowColor = SKIN.score; g.shadowBlur = 18;
+          for (const x of [-23, 9]) {
+            roundRect(g, x, -22, 14, 44, 4);
+            g.fill();
+          }
+          g.restore();
+          this.look.heading(g, t("PAUSED"), 378);
+          text(g, t("PAUSE_SUB"), W / 2, 450, 27, SKIN.muted, "center");
+          text(g, t("PAUSE_META"), W / 2, 1030, 27, SKIN.muted, "center");
+        },
       },
       result: {
         dim: 0.86,
-        widgets: [btn(930, "RETRY", () => this.actions.restart(), true), btn(1042, "TITLE", () => this.actions.toTitle())],
+        widgets: [btn(1030, "RETRY", () => this.actions.restart(), true), btn(1140, "TITLE", () => this.actions.toTitle())],
         draw: (g) => this.drawResult(g),
       },
     };
@@ -187,11 +206,14 @@ export class Menus {
     this.tweens.clear();
     this.anim = null;
     this.current = id;
+    if (id === "howto") this.howto.reset();
     if (id === "result") this.playResult();
     this.fade = 0;
     this.focus = -1;
     this.hover = -1;
     this.drag = null;
+    this.look.resetSelection();
+    this.updateSelection(0);
   }
 
   close(): void {
@@ -214,8 +236,26 @@ export class Menus {
     return this.current ? this.panels[this.current].widgets : [];
   }
 
+  /** Keyboard input takes over from hover; an untouched option selects its primary action. */
+  private get selected(): number {
+    if (this.drag) return this.widgets.indexOf(this.drag);
+    if (this.focus >= 0) return this.focus;
+    if (this.hover >= 0) return this.hover;
+    return Math.max(0, this.widgets.findIndex((w) => w.kind === "button" && w.primary));
+  }
+
+  private footprint(w: Widget): StampFootprint {
+    return w.kind === "slider" ? this.look.sliderFootprint(w.y) : this.look.buttonFootprint(w);
+  }
+
+  private updateSelection(dt: number): void {
+    const selected = this.selected, w = this.widgets[selected];
+    if (w) this.look.updateSelection(this.footprint(w), selected, dt);
+  }
+
   private hit(x: number, y: number): number {
-    return this.widgets.findIndex((w) => x >= BTN_X - 20 && x < BTN_X + BTN_W + 20 && y >= w.y - (w.kind === "slider" ? 30 : 0) && y < w.y + (w.kind === "slider" ? 30 : BTN_H));
+    const offset = this.current === "result" ? 24 * (1 - (this.anim?.buttons ?? 1)) : 0;
+    return this.widgets.findIndex((w) => this.look.hit(this.footprint(w), x, y - offset));
   }
 
   // ---------------------------------------------------------------- 입력 (열려 있으면 입력을 다 먹는다)
@@ -228,9 +268,10 @@ export class Menus {
     }
     const i = this.hit(x, y);
     const w = this.widgets[i];
+    if (i >= 0) { this.focus = -1; this.hover = i; }
     if (w?.kind === "slider") {
       this.drag = w;
-      this.slide(w, x);
+      this.slide(w, x, y);
     } else if (w) {
       this.hover = i;
     }
@@ -239,8 +280,11 @@ export class Menus {
 
   pointerMove(x: number, y: number): boolean {
     if (!this.current) return false;
-    if (this.drag) this.slide(this.drag, x);
-    else this.hover = this.hit(x, y);
+    if (this.drag) this.slide(this.drag, x, y);
+    else {
+      this.hover = this.hit(x, y);
+      if (this.hover >= 0) this.focus = -1;
+    }
     return true;
   }
 
@@ -248,6 +292,7 @@ export class Menus {
     if (!this.current) return false;
     if (this.drag) {
       this.drag = null;
+      this.hover = this.hit(x, y);
       return true;
     }
     const i = this.hit(x, y);
@@ -263,31 +308,36 @@ export class Menus {
   key(code: string): boolean {
     if (!this.current) return false;
     const ws = this.widgets;
-    if (code === "ArrowDown" || code === "Tab") this.focus = (this.focus + 1) % ws.length;
-    else if (code === "ArrowUp") this.focus = (this.focus - 1 + ws.length) % ws.length;
-    else if (code === "Escape") this.back();
+    if (code === "ArrowDown" || code === "Tab" || code === "ArrowUp") {
+      this.focus = (this.selected + (code === "ArrowUp" ? -1 : 1) + ws.length) % ws.length;
+      this.drag = null;
+      this.hover = -1;
+    } else if (code === "Escape") this.back();
     else if (code === "Enter" || code === "Space" || code === "NumpadEnter") {
       if (this.current === "result" && this.anim?.running) {
         this.finishResult();
         return true;
       }
-      const w = ws[Math.max(0, this.focus)];
+      const w = ws[this.selected];
       if (w?.kind === "button") this.press(w);
-    } else if ((code === "ArrowLeft" || code === "ArrowRight") && ws[this.focus]?.kind === "slider") {
-      const s = ws[this.focus] as Slider;
+    } else if ((code === "ArrowLeft" || code === "ArrowRight") && ws[this.selected]?.kind === "slider") {
+      const s = ws[this.selected] as Slider;
+      this.focus = this.selected;
+      this.drag = null;
+      this.hover = -1;
       s.set(Math.min(1, Math.max(0, Math.round((s.get() + (code === "ArrowRight" ? 0.05 : -0.05)) * 20) / 20)));
     }
     return true;
   }
 
-  private slide(s: Slider, x: number): void {
-    const v = Math.round(((x - BTN_X) / BTN_W) * 20) / 20;
+  private slide(s: Slider, x: number, y: number): void {
+    const v = Math.round(this.look.sliderValue(s.y, x, y) * 20) / 20;
     const nv = Math.min(1, Math.max(0, v));
     if (nv !== s.get()) s.set(nv);
   }
 
   private press(b: Button): void {
-    b.press = 1;
+    this.look.pressSelection();
     this.actions.click();
     b.onPress();
   }
@@ -295,85 +345,52 @@ export class Menus {
   // ---------------------------------------------------------------- 그리기
 
   update(dt: number): void {
-    this.clock += dt;
     this.tweens.update(dt);
+    this.look.update(dt);
+    if (this.current === "howto") this.howto.update(dt);
     this.fade = Math.min(1, this.fade + dt / 0.18);
-    for (const w of this.widgets) if (w.kind === "button") w.press = Math.max(0, w.press - dt / 0.15);
+    this.updateSelection(dt);
   }
 
   draw(g: CanvasRenderingContext2D): void {
     if (!this.current) return;
     const p = this.panels[this.current];
     g.save();
+    if (p.dim > 0) menuBackdrop(g);
     g.globalAlpha = this.fade;
-    g.fillStyle = `rgba(5,2,13,${p.dim})`;
-    g.fillRect(0, 0, W, H);
     p.draw(g);
     const btnA = this.current === "result" ? (this.anim?.buttons ?? 1) : 1;
+    g.save();
+    g.globalAlpha *= btnA;
+    if (btnA < 1) g.translate(0, 24 * (1 - btnA));
+    this.look.drawSelection(g);
     p.widgets.forEach((w, i) => {
-      g.save();
-      g.globalAlpha *= btnA;
-      if (btnA < 1) g.translate(0, 24 * (1 - btnA));
-      if (w.kind === "button") this.drawButton(g, w, i);
-      else this.drawSlider(g, w, i);
-      g.restore();
+      if (w.kind === "button") this.look.button(g, w, i, i === this.selected);
+      else this.look.slider(g, w.label(), w.y, w.get(), i, i === this.selected);
     });
     g.restore();
-  }
-
-  private drawButton(g: CanvasRenderingContext2D, b: Button, i: number): void {
-    const hot = this.hover === i;
-    const focused = this.focus === i;
-    const s = 1 - 0.06 * Math.sin(b.press * Math.PI);
-    g.save();
-    g.translate(W / 2, b.y + BTN_H / 2);
-    g.scale(s, s);
-    roundRect(g, -BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H, 22);
-    if (b.primary) {
-      g.shadowColor = alpha(SKIN.accent, 0.6);
-      g.shadowBlur = hot ? 26 : 16;
-      g.fillStyle = hot ? mix(SKIN.accent, "#ffffff", 0.25) : SKIN.accent;
-      g.fill();
-      g.shadowBlur = 0;
-    } else {
-      g.fillStyle = hot ? "#1a1433" : SKIN.button;
-      g.fill();
-      g.lineWidth = 3;
-      g.strokeStyle = hot ? "#ff80ea" : SKIN.buttonBorder;
-      g.stroke();
-    }
-    if (focused) {
-      roundRect(g, -BTN_W / 2 - 7, -BTN_H / 2 - 7, BTN_W + 14, BTN_H + 14, 28);
-      g.lineWidth = 3;
-      g.strokeStyle = "rgba(255,255,255,0.85)";
-      g.stroke();
-    }
-    text(g, b.label(), 0, 13, 36, b.primary ? SKIN.onAccent : SKIN.text, "center");
     g.restore();
   }
 
-  private drawSlider(g: CanvasRenderingContext2D, s: Slider, i: number): void {
-    text(g, s.label(), W / 2, s.y - 34, 34, SKIN.text, "center");
-    const v = s.get();
-    roundRect(g, BTN_X, s.y - 6, BTN_W, 12, 6);
-    g.fillStyle = SKIN.track;
-    g.fill();
-    roundRect(g, BTN_X, s.y - 6, BTN_W * v, 12, 6);
-    g.fillStyle = SKIN.accent;
-    g.fill();
-    g.beginPath();
-    g.arc(BTN_X + BTN_W * v, s.y, this.drag === s || this.focus === i ? 18 : 15, 0, Math.PI * 2);
-    g.fillStyle = this.focus === i ? SKIN.accent : SKIN.text;
-    g.shadowColor = alpha(SKIN.accent, 0.7);
-    g.shadowBlur = 12;
-    g.fill();
-    g.shadowBlur = 0;
+  /**
+   * 첫 접속 대기 화면: 타이틀 글자는 그대로 두고 메뉴 자리에 깜박이는 안내를 띄운다.
+   * 브라우저는 사용자가 한 번 눌러야 소리를 허용하므로, 이 한 번으로 음악을 연다.
+   */
+  drawTapToStart(g: CanvasRenderingContext2D, time: number): void {
+    this.drawTitle(g);
+    const pulse = 0.5 + 0.5 * Math.sin(time * 3.4);
+    g.save();
+    g.globalAlpha = 0.45 + 0.55 * pulse;
+    this.look.lettering(g, t("TAP_TO_START"), W / 2, 800, 44, 600, SKIN.accent);
+    g.restore();
+    this.look.lettering(g, t("TAP_SOUND_HINT"), W / 2, 862, 23, 600, SKIN.muted, "center", false);
   }
 
   private drawTitle(g: CanvasRenderingContext2D): void {
-    // 로고는 Game(TitleScreen)이 배경과 함께 그린다
-    text(g, t("SUBTITLE"), W / 2, 576, 26, "rgba(235,250,255,0.75)", "center", "rgba(0,0,0,0.8)");
-    if (this.best > 0) text(g, t("BEST_FMT", this.best), W / 2, 626, 30, SKIN.accent, "center", "rgba(0,0,0,0.8)");
+    this.look.lettering(g, t("ARCADE_TAG"), W / 2, 100, 25, 600, SKIN.accent);
+    text(g, t("SUBTITLE"), W / 2, 494, 30, SKIN.text, "center");
+    this.look.lettering(g, t("TITLE_META"), W / 2, 544, 23, 600, SKIN.score);
+    if (this.best > 0) this.look.lettering(g, t("BEST_FMT", this.best.toLocaleString()), W / 2, 1110, 30, 600, SKIN.timeText);
   }
 
   // ---------------------------------------------------------------- 결과 연출
@@ -384,7 +401,7 @@ export class Menus {
     if (!r) return;
     const targets = [[r.maxCombo], r.grades.slice(), [r.time], [r.biggest]];
     const an: ResultAnim = {
-      running: true, title: 0, titleScale: 1.6, score: 0, scoreA: 0, scoreScale: 1, best: 0, bestScale: 1,
+      running: true, title: 0, score: 0, scoreA: 0, scoreScale: 1, best: 0,
       rows: targets.map((v) => ({ a: 0, dx: 60, values: v.map(() => 0) })), buttons: 0,
     };
     this.anim = an;
@@ -392,7 +409,6 @@ export class Menus {
     const seq = this.tweens.add();
     seq.call(() => snd("pop", 0.8)).to(0.22, (k) => {
       an.title = Math.min(1, k * 2);
-      an.titleScale = 1.6 - 0.6 * k;
     }, ease.inQuad).wait(0.13);
     // 점수: 클수록 조금 더 오래 올라간다
     const dur = Math.min(1.6, Math.max(0.7, 0.7 + r.score / 60000));
@@ -408,7 +424,6 @@ export class Menus {
       }
     }).to(r.newBest ? 0.14 : 0.2, (k) => {
       an.best = Math.min(1, k * 2);
-      an.bestScale = r.newBest ? 2.2 - 1.2 * k : 1;
     }, ease.inQuad).wait(0.3);
     an.rows.forEach((row, i) => {
       seq.call(() => snd("pop", 1 + i * 0.12, -4)).to(0.12, (k) => {
@@ -441,64 +456,59 @@ export class Menus {
     const r = this.result, an = this.anim;
     if (!r || !an) return;
     this.tweens.clear();
-    Object.assign(an, { running: false, title: 1, titleScale: 1, score: r.score, scoreA: 1, scoreScale: 1, best: 1, bestScale: 1, buttons: 1 });
+    Object.assign(an, { running: false, title: 1, score: r.score, scoreA: 1, scoreScale: 1, best: 1, buttons: 1 });
     const targets = [[r.maxCombo], r.grades, [r.time], [r.biggest]];
     an.rows.forEach((row, i) => Object.assign(row, { a: 1, dx: 0, values: targets[i].slice() }));
   }
 
   private drawResult(g: CanvasRenderingContext2D): void {
-    const r = this.result, an = this.anim;
+    const r = this.result, an = this.anim, look = this.look;
     if (!r || !an) return;
-    g.save();
-    g.globalAlpha = an.title;
-    g.translate(W / 2, 200);
-    g.scale(an.titleScale, an.titleScale);
-    text(g, t("TIME_UP"), 0, 24, 70, SKIN.accent, "center", alpha(SKIN.accent, 0.5));
+    g.save(); g.globalAlpha *= an.title;
+    look.heading(g, t("TIME_UP"), 166);
     g.restore();
-    g.globalAlpha = an.scoreA;
-    text(g, t("SCORE"), W / 2, 296, 28, alpha(SKIN.score, 0.6), "center");
-    g.save();
-    g.translate(W / 2, 372);
-    g.scale(an.scoreScale, an.scoreScale);
-    text(g, String(an.score), 0, 36, 100, SKIN.score, "center", SKIN.scoreGlow);
+    text(g, t("RESULT_TAG"), 360, 239, 25, SKIN.muted, "center");
+    look.lettering(g, t("SCORE"), 360, 294, 25, 560, SKIN.score);
+    g.save(); g.globalAlpha *= an.scoreA;
+    const pulse = 1 + (an.scoreScale - 1) * 0.2;
+    g.translate(360, 367); g.scale(pulse, pulse); g.translate(-360, -367);
+    look.score(g, an.score.toLocaleString(), SKIN.score);
     g.restore();
-    g.globalAlpha = an.best;
-    g.save();
-    g.translate(W / 2, 470);
-    g.scale(an.bestScale, an.bestScale);
-    text(g, r.newBest ? t("NEW_BEST") : t("BEST_FMT", r.best), 0, 12, 34, r.newBest ? SKIN.timeText : SKIN.accent, "center", r.newBest ? SKIN.timeGlow : undefined);
+    g.save(); g.globalAlpha *= an.best;
+    look.lettering(g, r.newBest ? t("NEW_BEST") : t("BEST_FMT", r.best.toLocaleString()), 360, 492, 28, 560, SKIN.timeText);
     g.restore();
-    const rowY = [528, 606, 716, 794];
-    const rowH = [66, 96, 66, 66];
+    const statX = [176, 0, 360, 544];
     an.rows.forEach((row, i) => {
       if (row.a <= 0) return;
-      g.globalAlpha = row.a;
-      const x = 110 + row.dx, y = rowY[i];
-      roundRect(g, x, y, 500, rowH[i], 16);
-      g.fillStyle = SKIN.panel;
-      g.fill();
-      g.lineWidth = 2;
-      g.strokeStyle = SKIN.panelBorder;
-      g.stroke();
+      g.save(); g.globalAlpha *= row.a; g.translate(0, row.dx * 0.2);
       if (i === 1) {
+        look.lettering(g, t("RESULT_GRADES"), 84, 770, 24, 552, SKIN.muted, "left", false);
+        const max = Math.max(1, ...r.grades);
         for (let k = 0; k < 4; k++) {
-          const cx = x + k * 125 + 62.5;
-          text(g, GRADE_NAMES[k], cx, y + 32, 18, SKIN.grades[k], "center");
-          text(g, String(row.values[k]), cx, y + 76, 34, SKIN.grades[k], "center");
+          const x = 84 + k % 2 * 306, y = 830 + Math.floor(k / 2) * 92;
+          look.lettering(g, t(GRADE_KEYS[k]), x, y, 25, 166, SKIN.grades[k], "left");
+          look.lettering(g, String(row.values[k]), x + 246, y, 34, 80, SKIN.text, "right");
+          look.meter(g, x, y + 22, 246, row.values[k] / max, SKIN.grades[k]);
         }
-        return;
+      } else {
+        const x = statX[i], value = row.values[0];
+        const name = i === 0 ? "R_MAX_COMBO" : i === 2 ? "R_TIME" : "R_BIGGEST";
+        const val = i === 2 ? t("SEC_FMT", value) : i === 3 ? t("COUNT_FMT", value) : String(value);
+        const col = i === 0 ? SKIN.score : i === 2 ? SKIN.accent : SKIN.timeText;
+        fitText(g, t(name), x, 586, 22, 166, SKIN.muted, "center");
+        g.save();
+        g.translate(x, 640); g.rotate(-0.055); g.translate(-x, -640);
+        look.lettering(g, val, x, 654, 44, 160, col);
+        g.restore();
+        look.meter(g, x - 46, 687, 92, 1, col);
       }
-      const name = [t("R_MAX_COMBO"), "", t("R_TIME"), t("R_BIGGEST")][i];
-      const v = row.values[0];
-      const val = i === 2 ? t("SEC_FMT", v) : i === 3 ? t("COUNT_FMT", v) : String(v);
-      text(g, name, x + 28, y + 43, 28, "rgba(235,250,255,0.75)", "left");
-      text(g, val, x + 472, y + 46, 34, SKIN.text, "right");
+      g.restore();
     });
-    g.globalAlpha = 1;
   }
 }
 
-function heading(g: CanvasRenderingContext2D, s: string, y = 230): void {
-  g.font = font(70);
-  text(g, s, W / 2, y, 70, SKIN.accent, "center", alpha(SKIN.accent, 0.5));
+function heading(g: CanvasRenderingContext2D, s: string, y = 140): void {
+  roundRect(g, W / 2 - 28, y - 86, 56, 5, 2.5);
+  g.fillStyle = SKIN.accent; g.fill();
+  fitText(g, s, W / 2, y, 60, 620, SKIN.text, "center");
 }

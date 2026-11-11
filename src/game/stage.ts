@@ -2,6 +2,7 @@ import { roundRect } from "./board-view.ts";
 import { FONT, SKIN } from "./skin.ts";
 import { neonText } from "./neon.ts";
 import { ease, Tweens } from "./tween.ts";
+import { t } from "./i18n.ts";
 
 /**
  * 판 전체에 걸친 큰 연출: 시작 카운트다운(3·2·1·GO!), TIME UP, 피버 배지와 FEVER END, 화면 가장자리 빛.
@@ -9,7 +10,7 @@ import { ease, Tweens } from "./tween.ts";
  */
 const W = 720, H = 1280, CENTER_Y = 720;
 /** 피버 배지 자리: 보드 위쪽 빈 공간(보드를 가리지 않는다) */
-const BADGE_Y = 238;
+const BADGE_Y = 280;
 const GO_COLOR = "#ffd133";
 
 interface Big {
@@ -23,6 +24,7 @@ interface Big {
   /** 네온 글씨(GO!)로 그릴 때 빛 세기 */
   neon?: number;
   outline?: string;
+  badge?: boolean;
 }
 
 export class StageFx {
@@ -72,7 +74,7 @@ export class StageFx {
 
   /** GO!: 판 없이 글자만, 노란 네온 빛. 쾅 찍히고 지직 깜빡이며 켜졌다가 꺼지듯 사라진다. */
   private go(): void {
-    const b = this.big("GO!", 200, GO_COLOR);
+    const b = this.big(t("GO"), 200, GO_COLOR);
     b.neon = 0;
     b.scale = 1.8;
     this.tweens.add()
@@ -95,24 +97,26 @@ export class StageFx {
     this.band = { h: 0, a: 0.82 };
     const band = this.band;
     this.tweens.add().to(0.12, (k) => (band.h = 170 * k), ease.outBack);
-    const b = this.big("TIME UP!", 120, "#ff5959");
+    const b = this.big(t("TIME_UP"), 104, "#ff5959");
     b.outline = "rgba(64,217,255,0.55)";
     this.slam(b, 2.6, 0.14);
   }
 
   feverStart(): void {
-    const b = this.big("FEVER!  x3", 66, "#ffffff");
+    const b = this.big(t("FEVER"), 32, "#ff91df");
+    b.badge = true;
     b.y = BADGE_Y;
     b.outline = SKIN.tiers[3];
     this.bigs = this.bigs.filter((o) => o !== this.badge);
     this.badge = b;
-    this.slam(b, 2.4, 0.14);
+    this.slam(b, 1.15, 0.14);
     // 배지 자리에서 한 번 퍼지는 빛 글자
-    const glow = this.big("FEVER!  x3", 66, "rgba(255,64,217,0.6)");
+    const glow = this.big(t("FEVER"), 32, "rgba(255,64,217,0.4)");
+    glow.badge = true;
     glow.y = BADGE_Y;
     glow.alpha = 0;
     this.tweens.add().wait(0.12).call(() => (glow.alpha = 1)).to(0.45, (k) => {
-      glow.scale = 1 + 0.8 * k;
+      glow.scale = 1 + 0.12 * k;
       glow.alpha = 1 - k;
     }, ease.outCubic).call(() => this.remove(glow));
   }
@@ -128,14 +132,14 @@ export class StageFx {
     const b = this.badge;
     if (!b) return;
     this.badge = null;
-    b.text = "FEVER END";
+    b.text = t("FEVER_END");
     b.color = "#bfb3d9";
     b.outline = "#332e47";
     b.scale = 1;
     const y0 = b.y;
     this.tweens.add().to(0.8, (k) => {
-      b.y = y0 + 90 * k * k;
-      b.rot = 0.08 * k;
+      b.y = y0 + 8 * k * k;
+      b.rot = 0.02 * k;
       b.alpha = k < 0.44 ? 1 : 1 - (k - 0.44) / 0.56;
     }).call(() => this.remove(b));
   }
@@ -144,7 +148,7 @@ export class StageFx {
     this.t += dt;
     this.tweens.update(dt);
     if (this.badge) {
-      this.badge.scale = 1 + 0.05 * Math.sin(this.t * 9);
+      this.badge.scale = 1 + 0.015 * Math.sin(this.t * 9);
       const hue = (0.92 + 0.12 * Math.sin(this.t * 2.5)) % 1;
       this.badge.outline = `hsl(${hue * 360},100%,62%)`;
     }
@@ -152,7 +156,7 @@ export class StageFx {
 
   draw(g: CanvasRenderingContext2D): void {
     vignette(g, "255,20,38", this.danger);
-    vignette(g, "255,64,217", this.feverGlow);
+    vignette(g, "255,64,217", this.feverGlow * 0.3);
     if (this.band && this.band.h > 1) {
       g.fillStyle = `rgba(5,3,13,${this.band.a})`;
       g.fillRect(-20, CENTER_Y - this.band.h / 2, W + 40, this.band.h);
@@ -161,7 +165,7 @@ export class StageFx {
       if (b.alpha <= 0.01) continue;
       g.save();
       g.globalAlpha = Math.min(1, b.alpha);
-      g.translate(W / 2, b.y);
+      g.translate(b.badge ? 170 : W / 2, b.y);
       g.rotate(b.rot);
       g.scale(b.scale, b.scale);
       if (b.neon !== undefined) neonText(g, b.text, 0, 0, b.size, b.color, b.neon, 0.72, 4);
@@ -171,10 +175,10 @@ export class StageFx {
         g.textBaseline = "middle";
         g.lineJoin = "round";
         if (b.outline) {
-          g.lineWidth = Math.max(10, b.size / 6);
+          g.lineWidth = b.badge ? 2 : Math.max(10, b.size / 6);
           g.strokeStyle = b.outline;
           g.shadowColor = b.outline;
-          g.shadowBlur = b.size * 0.3;
+          g.shadowBlur = b.badge ? 6 : b.size * 0.3;
           g.strokeText(b.text, 0, 0);
           g.shadowBlur = 0;
         }
@@ -215,7 +219,7 @@ function vignette(g: CanvasRenderingContext2D, rgb: string, amount: number): voi
   g.fillStyle = grad;
   g.fillRect(0, 0, W, H);
   // 가장자리 띠
-  g.lineWidth = 24;
+  g.lineWidth = 6;
   g.strokeStyle = `rgba(${rgb},${Math.min(1, amount * 0.9)})`;
   roundRect(g, 0, 0, W, H, 0);
   g.stroke();

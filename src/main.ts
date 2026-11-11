@@ -14,7 +14,8 @@ if (params.has("autoplay") || params.has("debug")) (window as unknown as { __gam
 let scale = 1;
 function resize(): void {
   const vw = window.innerWidth, vh = window.innerHeight;
-  scale = Math.min(vw / W, vh / H);
+  const inset = vw >= 900 && vh >= 600 ? 48 : 0;
+  scale = Math.min((vw - inset) / W, (vh - inset) / H);
   const cssW = Math.floor(W * scale), cssH = Math.floor(H * scale);
   canvas.style.width = `${cssW}px`;
   canvas.style.height = `${cssH}px`;
@@ -39,6 +40,10 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointermove", (e) => game.pointerMove(...toLogical(e), e.pointerType === "touch"));
 canvas.addEventListener("pointerup", (e) => game.pointerUp(...toLogical(e), e.pointerType === "touch"));
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+// 게임 화면 바깥(PC 양옆 배경)을 눌러도 첫 입력으로 쳐서 소리를 열고 대기 화면을 넘긴다.
+window.addEventListener("pointerdown", (e) => {
+  if (e.target !== canvas) game.wake();
+});
 window.addEventListener("keydown", (e) => {
   if (e.repeat) return;
   if (e.code === "Space") e.preventDefault();

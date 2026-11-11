@@ -1,109 +1,185 @@
 import { BoardModel } from "../core/board-model.ts";
-import { GRADE_NAMES } from "../core/game-rules.ts";
-import { roundRect } from "./board-view.ts";
-import { text } from "./draw.ts";
-import { t, type TextKey } from "./i18n.ts";
-import { alpha, font, mix, SKIN } from "./skin.ts";
-
-/**
- * 게임 방법 카드 한 장: 왼쪽 그림(실제 게임과 같은 표시 방식) + 오른쪽 제목과 짧은 설명.
- * kind: 0 = 찍으면 번진다, 1 = 판정 색, 2 = 콤보와 시간
- */
-const PIC_W = 236;
-
-export function drawCard(g: CanvasRenderingContext2D, kind: 0 | 1 | 2, x: number, y: number, w: number, h: number): void {
-  roundRect(g, x, y, w, h, 22);
-  g.fillStyle = SKIN.panel;
-  g.fill();
-  g.lineWidth = 2;
-  g.strokeStyle = SKIN.panelBorder;
-  g.stroke();
-  const pic = { x: x + 14, y: y + 14, w: PIC_W - 14, h: h - 28 };
-  if (kind === 0) drawSpread(g, pic);
-  else if (kind === 1) drawGrades(g, pic);
-  else drawCombo(g, pic);
-  const n = kind + 1;
-  text(g, t(`HOWTO_C${n}_T` as TextKey), x + PIC_W + 20, y + 52, 30, SKIN.accent, "left");
-  t(`HOWTO_C${n}_B` as TextKey)
-    .split("\n")
-    .forEach((line, i) => text(g, line, x + PIC_W + 20, y + 100 + i * 38, 24, SKIN.text, "left"));
-}
+import { BLOCK, BoardView, CELL } from "./board-view.ts";
+import { fitText, text, wrapText } from "./draw.ts";
+import { Fx } from "./fx.ts";
+import { GRADE_KEYS, t, type TextKey } from "./i18n.ts";
+import { alpha, mix, SKIN } from "./skin.ts";
+import { Tweens } from "./tween.ts";
 
 interface Box { x: number; y: number; w: number; h: number }
 
-/** 찍은 3칸 중 한 칸만 분홍 덩어리에 걸쳐도 덩어리 전체가 함께 부서진다(부서질 칸은 실제 규칙으로 계산). */
-function drawSpread(g: CanvasRenderingContext2D, pic: Box): void {
-  const grid = ["31002", "40012", "10432", "23141"];
+const STAMP_AT = 1.2, RESTORE_AT = 2.7, LOOP = 3.2, FADE = 0.25;
+// Use gameplay coordinates for both BoardView and Fx, then scale the whole scene.
+const BOARD_SCALE = 0.8;
+const stamp = [{ x: -1, y: 0 }, { x: 0, y: 0 }, { x: 1, y: 0 }];
+
+function exampleBoard(): BoardModel {
   const model = new BoardModel(5, 4, 5, 1);
-  grid.forEach((row, yy) => [...row].forEach((ch, xx) => model.set(xx, yy, Number(ch))));
-  const stamp = [{ x: -1, y: 0 }, { x: 0, y: 0 }, { x: 1, y: 0 }];
-  const ax = 1, ay = 2;
-  const hit = new Set(model.computeBreak(ax, ay, stamp).all.map((p) => p.y * 5 + p.x));
-  const cs = 40;
-  const ox = pic.x + (pic.w - 5 * cs) / 2, oy = pic.y + (pic.h - 4 * cs) / 2;
-  for (let yy = 0; yy < 4; yy++) {
-    for (let xx = 0; xx < 5; xx++) {
-      const col = SKIN.blocks[model.get(xx, yy)];
-      roundRect(g, ox + xx * cs + 4, oy + yy * cs + 4, cs - 8, cs - 8, 7);
-      g.fillStyle = alpha(mix(col, "#000000", 0.75), 1);
-      g.fill();
-      g.lineWidth = 3;
-      g.strokeStyle = col;
-      g.stroke();
-      if (!hit.has(yy * 5 + xx)) {
-        g.fillStyle = SKIN.dim;
-        g.fillRect(ox + xx * cs, oy + yy * cs, cs, cs);
+  ["00422", "00311", "40312", "23040"].forEach((row, y) =>
+    [...row].forEach((ch, x) => model.set(x, y, Number(ch))));
+  return model;
+}
+
+// Pink, cyan and gold all break; disconnected blocks of those colors survive.
+const example = exampleBoard();
+const spread = example.computeBreak(2, 2, stamp);
+const hit = new Set(spread.all.map((p) => p.y * example.cols + p.x));
+
+/** Menu-owned demo: the actual board's wave, white pop, gravity and refill. */
+export class Howto {
+  private readonly board = new BoardView(0, 0, BOARD_SCALE);
+  private readonly tweens = new Tweens();
+  private fx = new Fx();
+  private time = 0;
+
+  constructor() {
+    this.reset();
+  }
+
+  reset(): void {
+    this.time = 0;
+    this.restoreBoard();
+  }
+
+  private restoreBoard(): void {
+    this.tweens.clear();
+    this.fx = new Fx();
+    this.board.setModel(exampleBoard(), false);
+    this.board.setPiece(stamp);
+  }
+
+  update(dt: number): void {
+    // Split at phase boundaries so opening, looping and debug time steps agree.
+    while (dt > 0) {
+      const boundary = this.time < STAMP_AT ? STAMP_AT : this.time < RESTORE_AT ? RESTORE_AT : LOOP;
+      const step = Math.min(dt, 1 / 120, boundary - this.time);
+      this.tweens.update(step);
+      this.board.update(step);
+      this.fx.update(step);
+      this.time += step;
+      dt -= step;
+      if (this.time >= boundary) {
+        if (boundary === STAMP_AT) this.landStamp();
+        else if (boundary === RESTORE_AT) this.restoreBoard();
+        else this.time = 0;
       }
     }
   }
-  const has = (xx: number, yy: number) => xx >= 0 && yy >= 0 && xx < 5 && yy < 4 && hit.has(yy * 5 + xx);
-  for (const [lw, c] of [[9, "rgba(0,0,8,0.85)"], [4, SKIN.grades[0]]] as const) {
-    g.lineWidth = lw;
-    g.strokeStyle = c;
-    g.lineCap = "square";
-    g.beginPath();
-    for (const i of hit) {
-      const xx = i % 5, yy = (i / 5) | 0, px = ox + xx * cs, py = oy + yy * cs;
-      if (!has(xx, yy - 1)) { g.moveTo(px, py); g.lineTo(px + cs, py); }
-      if (!has(xx, yy + 1)) { g.moveTo(px, py + cs); g.lineTo(px + cs, py + cs); }
-      if (!has(xx - 1, yy)) { g.moveTo(px, py); g.lineTo(px, py + cs); }
-      if (!has(xx + 1, yy)) { g.moveTo(px + cs, py); g.lineTo(px + cs, py + cs); }
+
+  private landStamp(): void {
+    const ev = this.board.placeAt(2, 2)!;
+    // Same tier-0 effects and per-block delays as Game.juice. The demo owns its
+    // own model, tweens and Fx, so it never changes the live board or score.
+    for (const b of ev.broken) {
+      const col = SKIN.blocks[b.color];
+      this.tweens.add().wait(b.delay).call(() => {
+        this.fx.burst(b.x, b.y, col, 4, 280);
+        this.fx.flash(b.x, b.y, BLOCK * BOARD_SCALE, mix(col, "#ffffff", 0.75));
+      });
     }
-    g.stroke();
+    this.fx.ring(ev.ax, ev.ay, 70 + ev.count * 6, SKIN.ring);
   }
-  g.lineWidth = 2.5;
-  g.strokeStyle = "#fff";
-  for (const o of stamp) g.strokeRect(ox + (ax + o.x) * cs + 8, oy + (ay + o.y) * cs + 8, cs - 16, cs - 16);
+
+  /** Three open sections; only 01 has a running illustration. */
+  drawSection(g: CanvasRenderingContext2D, kind: 0 | 1 | 2, x: number, y: number, w: number): void {
+    if (kind > 0) {
+      g.fillStyle = alpha(SKIN.muted, 0.22);
+      g.fillRect(x, y - 16, w, 1);
+    }
+    const n = kind + 1;
+    text(g, t("HOWTO_STEP_FMT", String(n).padStart(2, "0")), x, y + 34, 26, SKIN.accent, "left");
+    fitText(g, t(`HOWTO_C${n}_T` as TextKey), x + 64, y + 34, 32, w - 64, SKIN.text);
+    if (kind === 0) {
+      wrapText(g, t("HOWTO_C1_B"), x, y + 76, w, 26, 34, "#c5c3d6");
+      this.drawSpread(g, x, y + 170, w);
+      return;
+    }
+    const pic = { x, y: y + 62, w: 194, h: 120 };
+    if (kind === 1) drawGrades(g, pic);
+    else drawCombo(g, pic);
+    wrapText(g, t(`HOWTO_C${n}_B` as TextKey), x + 226, y + 82, w - 226, 25, 33, "#c5c3d6");
+  }
+
+  private drawSpread(g: CanvasRenderingContext2D, x: number, y: number, w: number): void {
+    const cs = 52, boardW = example.cols * cs, boardH = example.rows * cs;
+    const ready = this.time < STAMP_AT || this.time >= RESTORE_AT;
+    const opacity = this.time >= RESTORE_AT
+      ? Math.min(1, (this.time - RESTORE_AT) / FADE)
+      : Math.min(1, (RESTORE_AT - this.time) / FADE);
+    const outline = ready ? 1 : Math.max(0, 1 - (this.time - STAMP_AT) / 0.2);
+    g.save();
+    // Particles and rings stay in the illustration, away from the copy and 02.
+    g.beginPath(); g.rect(x, y - 12, boardW + 24, boardH + 30); g.clip();
+    g.globalAlpha *= opacity;
+    g.translate(x + 12, y);
+    const scale = cs / (CELL * BOARD_SCALE);
+    g.scale(scale, scale);
+    this.board.draw(g);
+    g.save();
+    g.scale(BOARD_SCALE, BOARD_SCALE);
+    g.globalAlpha *= outline;
+    this.drawFootprint(g);
+    g.restore();
+    this.fx.draw(g);
+    g.restore();
+
+    const tx = x + boardW + 44, tw = w - boardW - 44;
+    fitText(g, t("HOWTO_STAMP_FMT", spread.stamp.length), tx, y + 40, 24, tw, SKIN.text);
+    fitText(g, t("HOWTO_STAMP_LEGEND"), tx, y + 74, 22, tw, SKIN.text);
+    const cx = tx + tw / 2;
+    g.save();
+    g.strokeStyle = SKIN.accent; g.lineWidth = 3; g.lineCap = "round";
+    g.beginPath(); g.moveTo(cx, y + 95); g.lineTo(cx, y + 119);
+    g.moveTo(cx - 8, y + 111); g.lineTo(cx, y + 119); g.lineTo(cx + 8, y + 111); g.stroke();
+    g.restore();
+    fitText(g, t("HOWTO_BREAK_FMT", hit.size), tx, y + 158, 26, tw, ready ? SKIN.text : SKIN.accent);
+    fitText(g, t("HOWTO_BREAK_LEGEND"), tx, y + 192, 22, tw, SKIN.text);
+  }
+
+  /** Teaching overlays only; every block and break is drawn by BoardView/Fx. */
+  private drawFootprint(g: CanvasRenderingContext2D): void {
+    g.fillStyle = SKIN.dim;
+    for (let y = 0; y < example.rows; y++) for (let x = 0; x < example.cols; x++) {
+      if (!hit.has(y * example.cols + x)) g.fillRect(x * CELL, y * CELL, CELL, CELL);
+    }
+    for (const p of spread.all) {
+      const color = example.get(p.x, p.y);
+      const has = (x: number, y: number) => example.inBounds(x, y)
+        && hit.has(y * example.cols + x) && example.get(x, y) === color;
+      const px = p.x * CELL, py = p.y * CELL;
+      g.beginPath();
+      if (!has(p.x, p.y - 1)) { g.moveTo(px, py); g.lineTo(px + CELL, py); }
+      if (!has(p.x, p.y + 1)) { g.moveTo(px, py + CELL); g.lineTo(px + CELL, py + CELL); }
+      if (!has(p.x - 1, p.y)) { g.moveTo(px, py); g.lineTo(px, py + CELL); }
+      if (!has(p.x + 1, p.y)) { g.moveTo(px + CELL, py); g.lineTo(px + CELL, py + CELL); }
+      g.strokeStyle = SKIN.blocks[color]; g.lineWidth = 3; g.stroke();
+    }
+    // One continuous white outline spans three different colors throughout the hold.
+    g.lineWidth = 5; g.strokeStyle = SKIN.text;
+    g.strokeRect(CELL + 3, 2 * CELL + 3, 3 * CELL - 6, CELL - 6);
+  }
 }
 
-/** 판정 알약 네 개 */
+/** Color-coded grade examples, without pill outlines. */
 function drawGrades(g: CanvasRenderingContext2D, pic: Box): void {
-  const items: [string, number][] = [["+15", 0], ["+12", 1], ["+9", 2], ["+4", 3]];
-  const h = 40, gap = (pic.h - h * 4) / 3;
+  const items: [number, number][] = [[15, 0], [12, 1], [9, 2], [4, 3]];
   items.forEach(([n, gi], i) => {
-    const col = SKIN.grades[gi];
-    const ry = pic.y + i * (h + gap);
-    roundRect(g, pic.x + 8, ry, pic.w - 16, h, 20);
-    g.fillStyle = "rgba(5,3,15,0.94)";
-    g.fill();
-    g.lineWidth = 3;
-    g.strokeStyle = col;
-    g.stroke();
-    text(g, n, pic.x + 24, ry + 29, 24, "#fff", "left");
-    text(g, GRADE_NAMES[gi], pic.x + 84, ry + 28, 20, col, "left");
+    const col = SKIN.grades[gi], y = pic.y + 21 + i * 30;
+    g.fillStyle = col; g.fillRect(pic.x, y - 18, 3, 20);
+    text(g, t("POINTS_FMT", n), pic.x + 14, y, 23, SKIN.text, "left");
+    text(g, t(GRADE_KEYS[gi]), pic.x + 66, y, 22, col, "left");
   });
 }
 
 /** 콤보 글자 + 줄어드는 막대 + FEVER x3 + 시간 +1초 */
 function drawCombo(g: CanvasRenderingContext2D, pic: Box): void {
   const cx = pic.x + pic.w / 2;
-  const y = pic.y + 40;
-  text(g, "10 COMBO", cx, y, 34, SKIN.tiers[3], "center");
+  const y = pic.y + 24;
+  text(g, t("COMBO_FMT", 10), cx, y, 28, SKIN.tiers[3], "center");
   g.fillStyle = "rgba(255,255,255,0.15)";
   g.fillRect(cx - 80, y + 14, 160, 6);
   g.fillStyle = SKIN.tiers[3];
   g.fillRect(cx - 50, y + 14, 100, 6);
-  text(g, "FEVER! x3", cx, y + 68, 30, SKIN.grades[0], "center");
-  g.font = font(34);
-  text(g, t("SEC_FMT", 1), cx, y + 118, 34, "#66ff99", "center");
+  text(g, t("FEVER"), cx, y + 60, 26, SKIN.grades[0], "center");
+  text(g, t("SEC_FMT", 1), cx, y + 96, 28, "#66ff99", "center");
 }

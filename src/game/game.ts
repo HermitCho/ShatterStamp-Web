@@ -1,5 +1,5 @@
 import { bestMove } from "../core/bot.ts";
-import { GAME_TIME, GameRules, Grade, GRADE_NAMES, STAMP_COOLDOWN, tierFor, type BreakResult } from "../core/game-rules.ts";
+import { GAME_TIME, GameRules, Grade, STAMP_COOLDOWN, tierFor, type BreakResult } from "../core/game-rules.ts";
 import { ShapeQueue } from "../core/shape-queue.ts";
 import type { Cell, Shape } from "../core/shapes.ts";
 import { Sfx } from "./audio.ts";
@@ -10,8 +10,8 @@ import { Music } from "./music.ts";
 import { StageFx } from "./stage.ts";
 import { TitleScreen } from "./title.ts";
 import { Tutorial, type Rect as TRect } from "./tutorial.ts";
-import { t } from "./i18n.ts";
-import { outlined, text } from "./draw.ts";
+import { GRADE_KEYS, t } from "./i18n.ts";
+import { fitText, outlined, panel, text } from "./draw.ts";
 import { alpha, font, mix, SKIN } from "./skin.ts";
 import { ease, Tweens } from "./tween.ts";
 
@@ -26,7 +26,7 @@ type State = "title" | "tutorial" | "countdown" | "play" | "pause" | "result";
 const TUT_TOTAL = 4;
 
 /** 상단 가운데 일시정지 버튼 */
-const PAUSE_BTN = { x: 318, y: 40, w: 84, h: 84 };
+const PAUSE_BTN = { x: 318, y: 52, w: 84, h: 84 };
 
 interface Rect { x: number; y: number; w: number; h: number }
 
@@ -51,6 +51,7 @@ interface FloatText {
   scale: number;
   alpha: number;
   dx: number;
+  placement?: "grade" | "time";
 }
 
 const inRect = (r: Rect, x: number, y: number) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
@@ -81,9 +82,14 @@ export class Game {
   private lastTick = -1;
   private pressing = false;
   private clock = 0;
+  private readonly touchControls = matchMedia("(pointer: coarse)");
   private shakeOn = true;
   /** 판마다 1씩 늘린다. 판이 바뀐 뒤 늦게 도착한 예약 동작(결과 화면 열기 등)을 무시하는 데 쓴다. */
   private run = 0;
+  /** 첫 접속 대기("화면을 눌러 시작") 중인지. 첫 입력에서 소리를 열고 메뉴를 띄운다. */
+  private gate = false;
+  /** 대기 화면을 깨운 탭이 손을 뗄 때 메뉴 버튼으로 눌리지 않게 한 번 무시한다. */
+  private swallowUp = false;
   readonly menus: Menus;
   private readonly stage = new StageFx();
   private readonly title = new TitleScreen();
@@ -157,15 +163,35 @@ export class Game {
     }
     this.board.setup(COLS, ROWS, COLORS, opts.seed ?? 0);
     if (this.autoplay) this.start();
-    else this.openTitle();
+    else {
+      this.gate = true;
+      this.openTitle();
+    }
   }
 
   private openTitle(): void {
     this.state = "title";
     this.menus.best = this.best;
-    this.menus.open("title");
+    if (this.gate) this.menus.close();
+    else this.menus.open("title");
     this.title.playIntro();
     this.music.playTitle();
+  }
+
+  /**
+   * 첫 입력(화면 안팎 클릭·터치, 아무 키): 소리를 열고, 대기 화면이면 타이틀 메뉴를 띄운다.
+   * fromCanvas: 캔버스 위 탭이면 이어지는 손 떼기를 메뉴 버튼 누름으로 처리하지 않는다.
+   */
+  wake(fromCanvas = false): void {
+    this.unlockAudio();
+    if (!this.gate) return;
+    this.gate = false;
+    this.swallowUp = fromCanvas;
+    this.menus.open("title");
+    // 로고가 찍히는 소리·흔들림을 음악과 함께 다시 들려준다(처음 등장 때는 소리를 낼 수 없었다)
+    this.sfx.play("big", 1.1, -4);
+    this.sfx.play("break", 0.8, -6);
+    this.trauma = Math.min(1, this.trauma + 0.35);
   }
 
   private applySettings(s: { sfx: number; music: number; shake: boolean }): void {
@@ -319,11 +345,13 @@ export class Game {
     this.beginCountdown();
   }
 
-  /** 지금 모양을 가장 많이 부수는 자리의 칸들(화면 좌표) */
+  /** 지금 모양을 가장 많이 부수는 자리의 칸들(화면 좌표). 첫 칸이 찍을 칸(모양의 가운데 = 마우스 칸)이다. */
   private bestCells(): TRect[] {
     const mv = bestMove(this.board.model, this.current.cells);
     const cs = CELL * BOARD_SCALE;
-    return this.current.cells
+    const center = this.current.cells.filter((o) => o.x === 0 && o.y === 0);
+    const rest = this.current.cells.filter((o) => o.x !== 0 || o.y !== 0);
+    return [...center, ...rest]
       .map((o) => ({ x: mv.x + o.x, y: mv.y + o.y }))
       .filter((p) => this.board.model.inBounds(p.x, p.y))
       .map((p) => ({ x: BOARD_X + p.x * cs, y: BOARD_Y + p.y * cs, w: cs, h: cs }));
@@ -446,11 +474,11 @@ export class Game {
       r.timeDelta = 0;
     }
     if (r.timeDelta > 0) {
-      this.float([{ text: `+${r.timeDelta}s`, size: 44, color: "#66ff99" }], 610, 250);
+      this.float([{ text: t("TIME_DELTA_FMT", `+${r.timeDelta}`), size: 28, color: "#66ff99" }], 610, 250).placement = "time";
       this.sfx.play("bonus");
       this.timePulse = 1.25;
     } else if (r.timeDelta < 0) {
-      this.float([{ text: `${r.timeDelta}s`, size: 44, color: "#ff5959" }], 610, 250);
+      this.float([{ text: t("TIME_DELTA_FMT", r.timeDelta), size: 28, color: "#ff5959" }], 610, 250).placement = "time";
     }
     if (r.grade === Grade.MISS) this.breakCombo();
     this.current = this.queue.pop();
@@ -537,7 +565,7 @@ export class Game {
       return;
     }
     const c = this.comboText;
-    c.text = `${this.rules.combo} COMBO`;
+    c.text = t("COMBO_FMT", this.rules.combo);
     c.color = SKIN.tiers[tier];
     c.alpha = 1;
     const from = 1.3 + tier * 0.15;
@@ -567,18 +595,19 @@ export class Game {
   /** 판정 글자 묶음: [판정] / [+점수] / [N개 / 최고 M개(PERFECT 아닐 때)]가 한 덩어리로 움직인다. */
   private gradeText(r: BreakResult, ev: BreakEvent): void {
     let size = [62, 50, 40, 44][r.grade];
-    let text: string = GRADE_NAMES[r.grade];
+    let text: string = t(GRADE_KEYS[r.grade]);
     if (r.grade === Grade.PERFECT) {
       size += Math.min(this.perfectStreak - 1, 4) * 3;
-      text += this.perfectStreak >= 2 ? ` x${this.perfectStreak}!` : "!";
+      if (this.perfectStreak >= 2) text = t("GRADE_STREAK_FMT", text, this.perfectStreak);
     }
     const lines = [
       { text, size, color: SKIN.grades[r.grade] },
-      { text: `+${r.points}`, size: 34, color: SKIN.tiers[r.tier] },
+      { text: t("POINTS_FMT", r.points), size: 34, color: SKIN.tiers[r.tier] },
     ];
     if (r.grade !== Grade.PERFECT && r.bestN > 0) lines.push({ text: t("GRADE_SUB", ev.count, r.bestN), size: 26, color: SKIN.text });
     if (this.gradeFloat) this.gradeFloat.alpha = 0;
     const f = this.float(lines, Math.min(Math.max(ev.ax, 230), 490), ev.ay - 10, false, r.grade);
+    f.placement = "grade";
     this.gradeFloat = f;
   }
 
@@ -626,6 +655,10 @@ export class Game {
   // ---------------------------------------------------------------- 입력
 
   pointerDown(x: number, y: number, button: number): void {
+    if (this.gate) {
+      this.wake(true);
+      return;
+    }
     this.unlockAudio();
     if (this.menus.pointerDown(x, y)) return;
     if (this.state === "tutorial" && this.tutorial.hitSkip(x, y)) {
@@ -646,12 +679,18 @@ export class Game {
   }
 
   pointerMove(x: number, y: number, touch: boolean): void {
+    // 대기 화면을 깨운 탭은 메뉴 선택(도장 위치)에도 쓰지 않는다
+    if (this.swallowUp) return;
     if (this.menus.pointerMove(x, y)) return;
     if (!["play", "tutorial", "countdown"].includes(this.state) || (touch && !this.pressing)) return;
     this.board.setAnchor(this.board.cellAt(x, y));
   }
 
   pointerUp(x: number, y: number, touch: boolean): void {
+    if (this.swallowUp) {
+      this.swallowUp = false;
+      return;
+    }
     if (this.menus.pointerUp(x, y)) return;
     if (!this.pressing) return;
     this.pressing = false;
@@ -663,6 +702,10 @@ export class Game {
   }
 
   key(code: string): void {
+    if (this.gate) {
+      this.wake();
+      return;
+    }
     this.unlockAudio();
     if (this.state === "tutorial" && ["Space", "ShiftLeft", "ShiftRight", "KeyC"].includes(code)) {
       this.doHold();
@@ -758,9 +801,10 @@ export class Game {
       g.save();
       g.translate((Math.random() * 2 - 1) * s, (Math.random() * 2 - 1) * s);
       this.title.drawBackdrop(g);
-      if (this.menus.current === "title") this.title.drawLogo(g);
+      if (this.menus.current === "title" || this.gate) this.title.drawLogo(g);
       g.restore();
-      this.menus.draw(g);
+      if (this.gate) this.menus.drawTapToStart(g, this.clock);
+      else this.menus.draw(g);
       return;
     }
     g.fillStyle = mix(SKIN.bg, SKIN.bgFever, this.bgMix);
@@ -777,7 +821,7 @@ export class Game {
     for (const f of this.floats) this.drawFloat(g, f);
     this.stage.draw(g);
     if (this.flash.a > 0.001) {
-      g.globalAlpha = this.flash.a;
+      g.globalAlpha = this.flash.a * 0.3;
       g.fillStyle = this.flash.color;
       g.fillRect(0, 0, W, H);
       g.globalAlpha = 1;
@@ -788,60 +832,69 @@ export class Game {
 
   private drawHud(g: CanvasRenderingContext2D): void {
     const r = this.rules;
-    text(g, t("SCORE"), 40, 50, 22, alpha(SKIN.score, 0.7), "left");
-    text(g, String(r.score), 40, 112, 56, SKIN.score, "left", SKIN.scoreGlow);
-    text(g, t("BEST_FMT", Math.max(this.best, 0)), 40, 150, 20, "rgba(235,250,255,0.55)", "left");
-    text(g, t("TIME"), 680, 50, 22, alpha(SKIN.timeText, 0.7), "right");
+    panel(g, 24, 24, 672, 206);
+    text(g, t("SCORE"), 48, 67, 27, SKIN.score, "left");
+    fitText(g, r.score.toLocaleString(), 48, 133, 60, 250, SKIN.text);
+    fitText(g, t("BEST_FMT", Math.max(this.best, 0).toLocaleString()), 48, 177, 25, 260, SKIN.muted);
+    text(g, t("TIME"), 672, 67, 27, SKIN.timeText, "right");
     // 남은 시간 60·30·10초 기준: 숫자 노랑→주황→빨강, 막대 하늘→보라→빨강
     const tl = Math.max(0, r.timeLeft);
     const danger = tl >= 60 ? 0 : tl >= 30 ? (60 - tl) / 60 : tl >= 10 ? 0.5 + (30 - tl) / 40 : 1;
     const timeCol = danger < 0.5 ? mix(SKIN.timeText, "#ff8c1a", danger * 2) : mix("#ff8c1a", SKIN.warn, (danger - 0.5) * 2);
     const barCol = danger < 0.5 ? mix(SKIN.time, "#b866ff", danger * 2) : mix("#b866ff", SKIN.warn, (danger - 0.5) * 2);
     g.save();
-    g.translate(680, 92);
-    g.scale(this.timePulse, this.timePulse);
-    text(g, tl.toFixed(1), 0, 20, 56, timeCol, "right", SKIN.timeGlow);
+    g.translate(672, 113);
+    const pulse = 1 + (this.timePulse - 1) * 0.35;
+    g.scale(pulse, pulse);
+    fitText(g, tl.toFixed(1), 0, 20, 60, 228, timeCol, "right");
     g.restore();
-    if (this.state === "play") text(g, t("TARGET_FMT", r.timeTarget()), 680, 150, 20, "rgba(102,255,153,0.8)", "right");
-    g.fillStyle = SKIN.track;
-    g.fillRect(40, 168, 640, 12);
+    if (this.state === "play") fitText(g, t("TARGET_FMT", r.timeTarget()), 672, 177, 24, 304, "#a9d8bf", "right");
+    roundRect(g, 48, 202, 624, 8, 4);
+    g.fillStyle = "#30273e"; g.fill();
     g.fillStyle = barCol;
-    g.fillRect(40, 168, 640 * Math.min(1, tl / GAME_TIME), 12);
+    const barWidth = 624 * Math.min(1, tl / GAME_TIME);
+    if (barWidth > 0) { roundRect(g, 48, 202, barWidth, 8, Math.min(4, barWidth / 2)); g.fill(); }
 
-    // 콤보 글자와 콤보 막대(보드 위 빈 공간)
+    // All combo and grade feedback lives in this strip, clear of the board.
+    panel(g, 24, 252, 672, 124, this.inFever ? "#683159" : SKIN.panelBorder, 20);
     const c = this.comboText;
+    if (!this.inFever) text(g, t("ARCADE_TAG"), 48, 292, 23, SKIN.muted, "left");
     if (c.alpha > 0.01 && c.text) {
       g.save();
       g.globalAlpha = c.alpha;
-      g.translate(W / 2, BOARD_Y - 62);
-      g.scale(c.scale, c.scale);
-      text(g, c.text, 0, 18, 50, c.color, "center", alpha(c.color === SKIN.text ? "#40d9ff" : c.color, 0.6));
+      g.translate(660, 292);
+      const scale = 1 + (c.scale - 1) * 0.15;
+      g.scale(scale, scale);
+      fitText(g, c.text, 0, 0, 32, 240, c.color, "right");
       g.restore();
       const k = r.combo > 0 ? Math.min(1, r.comboTimer / r.comboWindow) : 0;
       g.fillStyle = SKIN.tiers[tierFor(r.combo)];
       g.globalAlpha = c.alpha;
-      g.fillRect(W / 2 - 160 * k, BOARD_Y - 28, 320 * k, 6);
+      g.fillRect(440, 304, 220 * k, 4);
       g.globalAlpha = 1;
     }
-    text(g, t("FOOTER"), W / 2, 1252, 17, "rgba(235,250,255,0.35)", "center");
+    if (!this.gradeFloat || this.gradeFloat.alpha <= 0.01) {
+      fitText(g, t("PLAY_HINT"), 360, 349, 26, 624, SKIN.muted, "center");
+    }
+    const touch = this.touchControls.matches;
+    if (this.state !== "tutorial") {
+      panel(g, 24, 1070, 672, 114);
+      text(g, t(touch ? "TOUCH_HINT" : "FOOTER"), 360, 1117, 27, SKIN.muted, "center");
+      text(g, t(touch ? "TOUCH_HOLD" : "FOOTER_PAUSE"), 360, 1158, 25, SKIN.muted, "center");
+    } else fitText(g, t(touch ? "TOUCH_HINT" : "HOWTO_KEYS"), 360, 1260, 24, 672, SKIN.muted, "center");
   }
 
   private drawSlots(g: CanvasRenderingContext2D): void {
     for (const s of [this.hold, this.now, ...this.nexts]) {
       g.save();
       g.globalAlpha = s.alpha;
-      roundRect(g, s.x, s.y, s.w, s.h, 18);
-      g.fillStyle = s.highlight ? SKIN.panelHi : SKIN.panel;
-      g.fill();
-      g.lineWidth = s.highlight ? 3 : 2;
-      g.strokeStyle = s.highlight ? SKIN.panelBorderHi : SKIN.panelBorder;
-      g.stroke();
+      panel(g, s.x, s.y, s.w, s.h, s.highlight ? "#b94ca8" : SKIN.panelBorder, 16);
       let top = 0;
       if (s.title) {
-        text(g, t(s.title as "HOLD" | "NOW"), s.x + 14, s.y + 30, s.title === "HOLD" ? 18 : 20, "rgba(235,250,255,0.55)", "left");
-        top = 30;
+        text(g, t(s.title as "HOLD" | "NOW"), s.x + s.w / 2, s.y + 34, 27, s.highlight ? SKIN.score : SKIN.text, "center");
+        top = 42;
       }
-      if (s.hint && s.cells.length === 0) text(g, t(s.hint as "HOLD_HINT"), s.x + s.w / 2, s.y + s.h - 16, 14, "rgba(235,250,255,0.4)", "center");
+      if (s.hint && s.cells.length === 0) t(s.hint as "HOLD_HINT").split("\n").forEach((line, i) => text(g, line, s.x + s.w / 2, s.y + 74 + i * 28, 24, SKIN.muted, "center"));
       g.beginPath();
       g.rect(s.x, s.y, s.w, s.h);
       g.clip();
@@ -853,7 +906,7 @@ export class Game {
       }
       g.restore();
     }
-    text(g, `▲ ${t("NEXT")}`, SIDE_X + 10, this.nexts[0].y - 8, 18, "rgba(235,250,255,0.55)", "left");
+    text(g, t("NEXT"), SIDE_X + SIDE_W / 2, this.nexts[0].y - 8, 24, SKIN.muted, "center");
   }
 
   private drawPiece(g: CanvasRenderingContext2D, s: Slot, top: number): void {
@@ -865,7 +918,7 @@ export class Game {
       mxx = Math.max(mxx, c.x);
       mxy = Math.max(mxy, c.y);
     }
-    const p = s.cellPx;
+    const p = Math.min(s.cellPx, (s.w - 24) / (mxx - mnx + 1), (s.h - top - 18) / (mxy - mny + 1));
     const dw = (mxx - mnx + 1) * p, dh = (mxy - mny + 1) * p;
     const ox = s.x + (s.w - dw) / 2, oy = s.y + top + (s.h - top - dh) / 2 + s.oy;
     const inset = Math.max(2, p * 0.08);
@@ -881,6 +934,23 @@ export class Game {
 
   private drawFloat(g: CanvasRenderingContext2D, f: FloatText): void {
     if (f.alpha <= 0.01) return;
+    if (f.placement === "grade") {
+      if (f !== this.gradeFloat) return;
+      g.save();
+      g.globalAlpha = Math.max(0, Math.min(1, f.alpha));
+      fitText(g, f.lines[0].text, 48, 349, 32, f.lines.length > 2 ? 250 : 420, f.lines[0].color);
+      fitText(g, f.lines[1].text, 672, 349, 32, 160, f.lines[1].color, "right");
+      if (f.lines[2]) fitText(g, f.lines[2].text, 414, 349, 24, 210, SKIN.muted, "center");
+      g.restore();
+      return;
+    }
+    // Time bonuses sit below the timer; other small notices retain their location.
+    if (f.placement === "time") {
+      g.save(); g.globalAlpha = Math.max(0, Math.min(1, f.alpha));
+      text(g, f.lines[0].text, 670, 247, 25, f.lines[0].color, "right");
+      g.restore();
+      return;
+    }
     // 긴 글자(PERFECT x12! 등)가 화면 밖으로 나가지 않게 가로 위치를 안쪽으로 당긴다.
     let half = 0;
     for (const l of f.lines) {
@@ -902,13 +972,7 @@ export class Game {
 
   private drawPauseButton(g: CanvasRenderingContext2D): void {
     const b = PAUSE_BTN;
-    g.beginPath();
-    g.arc(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, 0, Math.PI * 2);
-    g.fillStyle = "rgba(255,255,255,0.08)";
-    g.fill();
-    g.lineWidth = 2;
-    g.strokeStyle = SKIN.panelBorder;
-    g.stroke();
+    panel(g, b.x, b.y, b.w, b.h, SKIN.panelBorder, 24);
     g.fillStyle = SKIN.text;
     g.fillRect(b.x + 31, b.y + 28, 8, 28);
     g.fillRect(b.x + 45, b.y + 28, 8, 28);

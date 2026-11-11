@@ -1,5 +1,6 @@
 import { roundRect } from "./board-view.ts";
 import { FONT, SKIN } from "./skin.ts";
+import { t } from "./i18n.ts";
 
 /**
  * 타이틀 화면의 로고와 배경(Godot 버전 title_logo.gd / title_backdrop.gd와 같은 연출).
@@ -10,12 +11,12 @@ import { FONT, SKIN } from "./skin.ts";
 const W = 720, H = 1280;
 const CYAN = "#4debff";
 const PINK = "#ff47d9";
-const TOP_SIZE = 112, STAMP_SIZE = 116, GAP = 4;
+const TOP_SIZE = 100, STAMP_SIZE = 104, GAP = 4;
 const GATHER_TIME = 0.42, STAGGER = 0.05, SLAM_AT = 0.78, SLAM_TIME = 0.14;
 const SLANT = -0.22;
 /** 로고 위치(Godot의 로고 상자 y=150 기준) */
-const LOGO_Y = 150;
-const HORIZON = 930;
+const LOGO_Y = 100;
+const HORIZON = 1030;
 const LOGO_ZONE = { x: 40, y: 120, w: 640, h: 440 };
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -45,10 +46,10 @@ export class TitleScreen {
   private layout(g: CanvasRenderingContext2D): void {
     if (this.letters.length) return;
     g.font = `700 ${TOP_SIZE}px ${FONT}`;
-    const ws = [..."SHATTER"].map((c) => g.measureText(c).width);
+    const ws = [...t("LOGO_TOP")].map((c) => g.measureText(c).width);
     const total = ws.reduce((a, b) => a + b + GAP, -GAP);
     let x = (W - total) / 2;
-    [..."SHATTER"].forEach((ch, i) => {
+    [...t("LOGO_TOP")].forEach((ch, i) => {
       this.letters.push({ ch, x, w: ws[i], fx: 0, fy: 0, rot0: 0 });
       x += ws[i] + GAP;
     });
@@ -146,15 +147,15 @@ export class TitleScreen {
     g.fillRect(0, HORIZON, W, H - HORIZON);
     const glow = g.createLinearGradient(0, HORIZON - 70, 0, HORIZON + 56);
     glow.addColorStop(0, "rgba(255,64,217,0)");
-    glow.addColorStop(0.55, "rgba(255,64,217,0.35)");
+    glow.addColorStop(0.55, "rgba(255,64,217,0.16)");
     glow.addColorStop(1, "rgba(255,64,217,0)");
     g.fillStyle = glow;
     g.fillRect(0, HORIZON - 70, W, 126);
-    g.strokeStyle = "rgba(255,64,217,0.9)";
-    g.lineWidth = 3;
+    g.strokeStyle = "rgba(255,64,217,0.4)";
+    g.lineWidth = 2;
     line(g, 0, HORIZON, W, HORIZON);
     // 세로선: 소실점으로 모인다
-    g.strokeStyle = "rgba(64,230,255,0.28)";
+    g.strokeStyle = "rgba(64,230,255,0.14)";
     g.lineWidth = 1.5;
     for (let i = -12; i <= 12; i++) line(g, W / 2, HORIZON, W / 2 + i * 110, H);
     // 가로선: 앞으로 흘러온다(가까울수록 간격이 넓다)
@@ -162,7 +163,7 @@ export class TitleScreen {
     for (let i = 0; i < 12; i++) {
       const z = (i + 1 - scroll) / 12;
       const y = HORIZON + depth * z * z;
-      g.strokeStyle = `rgba(64,230,255,${0.08 + 0.4 * z})`;
+      g.strokeStyle = `rgba(64,230,255,${0.04 + 0.2 * z})`;
       g.lineWidth = 1 + 1.5 * z;
       line(g, 0, y, W, y);
     }
@@ -170,6 +171,8 @@ export class TitleScreen {
       const col = SKIN.blocks[f.c];
       let a = f.a;
       if (f.x > LOGO_ZONE.x && f.x < LOGO_ZONE.x + LOGO_ZONE.w && f.y > LOGO_ZONE.y && f.y < LOGO_ZONE.y + LOGO_ZONE.h) a *= 0.25;
+      // Open menu labels need quiet space even when a floater passes behind them.
+      if (f.x > 84 && f.x < 636 && f.y > 580 && f.y < 1080) a *= 0.18;
       g.save();
       g.translate(f.x, f.y);
       g.rotate(f.rot);
@@ -258,7 +261,7 @@ export class TitleScreen {
     g.rotate((-4 * Math.PI) / 180);
     g.scale(sc, sc);
     g.font = `700 ${STAMP_SIZE}px ${FONT}`;
-    const ws = [..."STAMP"].map((c) => g.measureText(c).width);
+    const ws = [...t("LOGO_BOTTOM")].map((c) => g.measureText(c).width);
     const tw = ws.reduce((x, y) => x + y, 0) + 12 * 4;
     const fx = -tw / 2 - 34, fy = -82, fw = tw + 68, fh = 156;
     g.globalAlpha = a;
@@ -274,7 +277,7 @@ export class TitleScreen {
     g.lineWidth = 2.5;
     g.stroke();
     let x = -tw / 2;
-    [..."STAMP"].forEach((c, i) => {
+    [...t("LOGO_BOTTOM")].forEach((c, i) => {
       glowText(g, c, x, STAMP_SIZE * 0.36, STAMP_SIZE, PINK, a);
       x += ws[i] + 12;
     });

@@ -1,5 +1,5 @@
 /** 글자 그리기 도우미 */
-import { font } from "./skin.ts";
+import { alpha, font, SKIN } from "./skin.ts";
 
 export function text(g: CanvasRenderingContext2D, s: string, x: number, y: number, size: number, color: string, align: CanvasTextAlign, glow?: string): void {
   g.font = font(size);
@@ -29,4 +29,72 @@ export function outlined(g: CanvasRenderingContext2D, s: string, x: number, y: n
   g.shadowOffsetY = 0;
   g.fillStyle = color;
   g.fillText(s, x, y);
+}
+
+/** Keep translated labels and large scores inside their allotted space. */
+export function fitText(g: CanvasRenderingContext2D, s: string, x: number, y: number, size: number, width: number, color: string, align: CanvasTextAlign = "left"): void {
+  g.font = font(size);
+  const measured = g.measureText(s).width;
+  text(g, s, x, y, measured > width ? size * width / measured : size, color, align);
+}
+
+/** Wrap on words, with a character fallback for Korean and long words. */
+export function wrapText(g: CanvasRenderingContext2D, s: string, x: number, y: number, width: number, size: number, lineHeight: number, color = SKIN.text): number {
+  g.font = font(size);
+  const lines: string[] = [];
+  for (const paragraph of s.split("\n")) {
+    let line = "";
+    for (const word of paragraph.split(" ")) {
+      const next = line ? `${line} ${word}` : word;
+      if (g.measureText(next).width <= width) { line = next; continue; }
+      if (line) lines.push(line);
+      line = "";
+      for (const ch of word) {
+        if (line && g.measureText(line + ch).width > width) { lines.push(line); line = ""; }
+        line += ch;
+      }
+    }
+    lines.push(line);
+  }
+  lines.forEach((line, i) => text(g, line, x, y + i * lineHeight, size, color, "left"));
+  return lines.length * lineHeight;
+}
+
+export function panel(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, accent = SKIN.panelBorder, radius = 24): void {
+  g.save();
+  const fill = g.createLinearGradient(x, y, x + w * 0.4, y + h);
+  fill.addColorStop(0, "#1c172f");
+  fill.addColorStop(1, SKIN.panel);
+  g.beginPath();
+  g.roundRect(x, y, w, h, radius);
+  g.fillStyle = fill;
+  g.fill();
+  g.lineWidth = 1.5;
+  g.strokeStyle = accent;
+  g.stroke();
+  g.beginPath();
+  g.moveTo(x + radius, y + 1);
+  g.lineTo(x + w - radius, y + 1);
+  g.strokeStyle = "rgba(255,255,255,0.07)";
+  g.stroke();
+  g.restore();
+}
+
+/** An opaque, quiet backdrop keeps paused boards and effects out of menus. */
+export function menuBackdrop(g: CanvasRenderingContext2D): void {
+  g.fillStyle = SKIN.bg;
+  g.fillRect(0, 0, 720, 1280);
+  const halo = g.createRadialGradient(360, 100, 0, 360, 100, 700);
+  halo.addColorStop(0, "#261334");
+  halo.addColorStop(1, alpha(SKIN.bg, 0));
+  g.fillStyle = halo;
+  g.fillRect(0, 0, 720, 1280);
+  g.strokeStyle = "rgba(100,90,160,0.08)";
+  g.lineWidth = 1;
+  for (let x = -720; x <= 1440; x += 90) {
+    g.beginPath(); g.moveTo(360, 930); g.lineTo(x, 1280); g.stroke();
+  }
+  for (let y = 962; y < 1280; y += (y - 900) * 0.35) {
+    g.beginPath(); g.moveTo(0, y); g.lineTo(720, y); g.stroke();
+  }
 }

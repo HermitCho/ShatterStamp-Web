@@ -81,16 +81,16 @@ export class Fx {
     for (const f of this.flashes) {
       const k = 1 - f.t / f.max;
       const s = f.s * (1 + 0.25 * (1 - k));
-      g.globalAlpha = k;
+      g.globalAlpha = k * 0.65;
       g.fillStyle = f.c;
       g.fillRect(f.x - s / 2, f.y - s / 2, s, s);
     }
     g.globalCompositeOperation = "lighter";
     for (const r of this.rings) {
       const k = r.t / r.max;
-      g.globalAlpha = (1 - k) * 0.9;
+      g.globalAlpha = (1 - k) * 0.45;
       g.strokeStyle = r.c;
-      g.lineWidth = 10 * (1 - k) + 2;
+      g.lineWidth = 5 * (1 - k) + 1;
       g.beginPath();
       g.arc(r.x, r.y, r.r * (1 - (1 - k) ** 3), 0, Math.PI * 2);
       g.stroke();
