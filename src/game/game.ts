@@ -7,6 +7,7 @@ import type { Cell, Shape } from "../core/shapes.ts";
 import { Sfx } from "./audio.ts";
 import { BoardView, CELL, BLOCK, roundRect, type BreakEvent } from "./board-view.ts";
 import { Fx } from "./fx.ts";
+import { Hype } from "./hype.ts";
 import { Menus } from "./menus.ts";
 import { askNickname } from "./nick-input.ts";
 import { createOnline, type RunTicket } from "./online.ts";
@@ -36,8 +37,14 @@ const NEXT_COUNT = 4;
 type State = "title" | "tutorial" | "countdown" | "play" | "pause" | "result";
 const TUT_TOTAL = 4;
 
-/** 상단 가운데 일시정지 버튼 */
-const PAUSE_BTN = { x: 318, y: 52 + PLAY_OY, w: 84, h: 84 };
+/** 오른쪽 위 구석 일시정지 버튼(가운데는 큰 시간 숫자 자리) */
+const PAUSE_BTN = { x: 616, y: 12, w: 84, h: 84 };
+/** 판 영역(화면 좌표) */
+const BOARD_BOX = { x: BOARD_X, y: BOARD_Y, w: BOARD_COLS * CELL * BOARD_SCALE, h: BOARD_ROWS * CELL * BOARD_SCALE };
+/** 점수 숫자 자리(점수 조각이 날아가는 곳) */
+const SCORE_AT = { x: 120, y: 112 + PLAY_OY };
+/** 판 아래 바닥 격자의 지평선 */
+const FLOOR_Y = 1078;
 /** 이어하기 뒤 다시 멈출 수 있기까지의 시간(초). 멈춤·이어하기를 반복해 생각할 시간을 버는 꼼수를 줄인다. */
 const PAUSE_LOCK = 3;
 
@@ -103,6 +110,14 @@ export class Game {
   private gradeFloat: FloatText | null = null;
   private comboText = { text: "", color: SKIN.text, scale: 1, alpha: 0 };
   private timePulse = 1;
+  /** 점수 조각이 도착할 때 점수 숫자가 툭 커진다 */
+  private scorePulse = 1;
+  /** 0~1: 음악 박자(박 직후 1) */
+  private beat = 0;
+  private readonly hype = new Hype(BOARD_BOX, SCORE_AT, () => {
+    this.scorePulse = 1.16;
+    this.sfx.play("tick", 1.6, -12);
+  });
   private lastTick = -1;
   private pressing = false;
   private clock = 0;
@@ -452,6 +467,7 @@ export class Game {
     this.run++;
     this.breakCombo(true);
     this.stage.clear();
+    this.hype.clear();
     this.tutorial.close();
     this.comboText.alpha = 0;
     this.floats = [];
@@ -497,6 +513,7 @@ export class Game {
     this.comboText.alpha = 0;
     this.lastTick = -1;
     this.stage.clear();
+    this.hype.clear();
     this.tutorial.close();
     this.current = this.queue.pop();
     this.refreshPieces();
@@ -520,11 +537,13 @@ export class Game {
         else {
           this.sfx.play("go");
           this.sfx.play("start", 1.2, -4);
+          this.board.frameKick("#ffd133", 70, 0.6);
         }
       },
       () => {
         if (this.run === run && this.state === "countdown") this.state = "play";
       },
+      this.pauseLock === 0,
     );
   }
 
@@ -574,6 +593,7 @@ export class Game {
     this.rules.timeLeft = this.startTime;
     this.perfectStreak = 0;
     this.comboText.alpha = 0;
+    this.hype.clear();
     this.held = null;
     this.holdUsed = false;
     this.refreshPieces();
@@ -610,6 +630,7 @@ export class Game {
   private end(): void {
     this.state = "result";
     this.board.setAnchor(null);
+    this.hype.flushChips();
     this.breakCombo(true);
     this.stage.danger = 0;
     this.stage.timeUp();
@@ -708,6 +729,7 @@ export class Game {
     this.perfectStreak = r.grade === Grade.PERFECT ? this.perfectStreak + 1 : 0;
     this.juice(ev, r);
     this.gradeText(r, ev);
+    this.hype.addChip(r.points, ev.ax, ev.ay, SKIN.tiers[r.tier]);
     if (this.state === "tutorial") {
       this.rules.timeLeft = this.startTime; // 연습 중에는 시간이 늘거나 줄지 않는다
       r.timeDelta = 0;
@@ -794,8 +816,27 @@ export class Game {
     }
     if (n >= 15) this.sfx.play("big");
     if (tier >= 2) this.flashScreen("#ffffff", 0.1 + (tier - 2) * 0.08);
+    // 판 테두리 빛 고리: 아주 크게 부쉈을 때와 연속 PERFECT 3·6·9…번째에만(너무 자주면 무뎌진다)
+    if (n >= 18 || (perfect && this.perfectStreak >= 3 && this.perfectStreak % 3 === 0)) {
+      this.board.frameKick(perfect ? SKIN.grades[Grade.PERFECT] : SKIN.tiers[tier], 30 + Math.min(n, 30));
+    }
     if (tier >= 3 && !this.inFever) this.enterFever();
     this.comboPop(tier);
+    this.hypeFor(ev, tier);
+  }
+
+  /** 콤보 숫자는 매번, 칭찬 글자는 5·15·25…, 돌파 띠는 20·30…(10은 피버 띠) */
+  private hypeFor(ev: BreakEvent, tier: number): void {
+    const c = this.rules.combo, col = SKIN.tiers[tier];
+    if (c >= 2) this.hype.showCombo(c, ev.ax, ev.ay, col);
+    if (c % 10 === 5) {
+      this.hype.showPraise(Math.floor(c / 10), c >= 15 ? SKIN.timeText : SKIN.accent);
+      this.sfx.play("sparkle", 1.1, -4);
+    }
+    if (c >= 20 && c % 10 === 0) {
+      this.hype.showBanner(t("COMBO_FMT", c) + "!", col);
+      this.sfx.play("start", 1.35, -5);
+    }
   }
 
   private comboPop(tier: number): void {
@@ -822,6 +863,8 @@ export class Game {
     this.fx.ring(cx, cy, 520, SKIN.tiers[3]);
     this.fx.ring(cx, cy, 340, "rgba(255,255,255,0.8)");
     this.stage.feverStart();
+    this.hype.showBanner("FEVER!", SKIN.tiers[3]);
+    this.board.frameKick(SKIN.tiers[3], 80, 0.7);
     this.music.setFever(true);
     for (let i = 0; i < 24; i++) this.fx.ember(20 + Math.random() * 680, 1290, `hsl(${290 + Math.random() * 70},100%,72%)`);
   }
@@ -971,8 +1014,17 @@ export class Game {
     this.trauma = Math.max(0, this.trauma - realDt * 1.8);
     this.flash.a = Math.max(0, this.flash.a - realDt * (this.flash.a / 0.25 + 0.5));
     this.timePulse += (1 - this.timePulse) * Math.min(1, realDt * 10);
+    this.scorePulse += (1 - this.scorePulse) * Math.min(1, realDt * 12);
+    // 배경 음악 박자(소리가 아직 안 켜졌으면 같은 빠르기의 시계로)
+    let ph = this.music.beatPhase();
+    if (ph < 0) ph = (this.clock * 128 / 60) % 1;
+    const live = this.state === "play" || this.state === "countdown" || this.state === "tutorial";
+    this.beat = Math.exp(-ph * 5) * (live ? 1 : 0.3);
+    this.board.beat = this.beat;
     this.bgMix += ((this.inFever ? 1 : 0) - this.bgMix) * Math.min(1, realDt * 6);
     this.tweens.update(dt);
+    this.hype.update(dt);
+    this.board.feverMix = this.bgMix;
     this.board.update(dt);
     this.fx.update(dt);
     this.menus.update(realDt);
@@ -1050,14 +1102,17 @@ export class Game {
     }
     g.fillStyle = mix(SKIN.bg, SKIN.bgFever, this.bgMix);
     g.fillRect(0, 0, W, H);
+    this.drawFloor(g);
     const s = this.shakeOn ? 26 * this.trauma * this.trauma : 0;
     g.save();
     g.translate((Math.random() * 2 - 1) * s, (Math.random() * 2 - 1) * s);
     this.board.draw(g);
     this.fx.draw(g);
+    this.hype.drawBoardLayer(g);
     g.restore();
     this.drawHud(g);
     this.drawSlots(g);
+    this.hype.drawChips(g);
     this.tutorial.draw(g);
     if (this.state !== "countdown") for (const f of this.floats) this.drawFloat(g, f);
     if (this.state === "countdown") this.drawCountdownBackdrop(g);
@@ -1082,34 +1137,97 @@ export class Game {
     g.restore();
   }
 
+  /** 판 아래 바닥 격자: 박자마다 밝아지고, 피버 땐 분홍·금색으로 물든다. 판 뒤에는 은은한 빛 웅덩이. */
+  private drawFloor(g: CanvasRenderingContext2D): void {
+    const fm = this.bgMix, beat = this.beat;
+    const cx = BOARD_BOX.x + BOARD_BOX.w / 2, cy = BOARD_BOX.y + BOARD_BOX.h / 2;
+    const pool = g.createRadialGradient(cx, cy, 60, cx, cy, 560);
+    pool.addColorStop(0, alpha(mix("#40d9ff", "#ff40d9", fm), 0.05 + 0.07 * fm + 0.03 * beat));
+    pool.addColorStop(1, "rgba(9,7,21,0)");
+    g.fillStyle = pool;
+    g.fillRect(0, 0, W, H);
+    const lineCol = mix("#40e6ff", "#ff6be0", fm);
+    g.save();
+    g.lineWidth = 1.5;
+    g.strokeStyle = alpha(lineCol, 0.07 + 0.12 * beat);
+    g.beginPath();
+    for (let i = -10; i <= 10; i++) {
+      g.moveTo(W / 2 + i * 22, FLOOR_Y);
+      g.lineTo(W / 2 + i * 130, H);
+    }
+    // 가로선: 앞으로 흘러온다(가까울수록 간격이 넓다)
+    const scroll = (this.clock * 0.5) % 1, depth = H - FLOOR_Y;
+    for (let i = 0; i < 7; i++) {
+      const y = FLOOR_Y + depth * ((i + scroll) / 7) ** 2;
+      g.moveTo(0, y);
+      g.lineTo(W, y);
+    }
+    g.stroke();
+    const hz = g.createLinearGradient(0, 0, W, 0);
+    const hc = mix("#ff40d9", "#ffc733", fm);
+    hz.addColorStop(0, alpha(hc, 0));
+    hz.addColorStop(0.5, alpha(hc, 0.25 + 0.35 * beat));
+    hz.addColorStop(1, alpha(hc, 0));
+    g.strokeStyle = hz;
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(0, FLOOR_Y);
+    g.lineTo(W, FLOOR_Y);
+    g.stroke();
+    g.restore();
+  }
+
+  /**
+   * 위쪽 표시: 상자 없이 큰 숫자와 얇은 선만. 왼쪽 점수 · 가운데 큰 시간 · 오른쪽 최고,
+   * 그 아래 시간 막대와 다음 +1초 목표, 그 아래 콤보·판정 줄(위아래 선 하나씩).
+   */
   private drawHudPanels(g: CanvasRenderingContext2D): void {
     const r = this.rules;
-    panel(g, 24, 24, 672, 206);
-    text(g, t("SCORE"), 48, 67, 27, SKIN.score, "left");
-    fitText(g, r.score.toLocaleString(), 48, 133, 60, 250, SKIN.text);
-    fitText(g, t("BEST_FMT", Math.max(this.best, 0).toLocaleString()), 48, 177, 27, 260, SKIN.muted);
-    text(g, t("TIME"), 672, 67, 27, SKIN.timeText, "right");
+    text(g, t("SCORE"), 48, 62, 26, SKIN.score, "left");
+    g.save();
+    const sp = this.scorePulse;
+    g.translate(48, 112); g.scale(sp, sp); g.translate(-48, -112);
+    fitText(g, Math.max(0, r.score - this.hype.pending).toLocaleString(), 48, 132, 56, 210, SKIN.text);
+    g.restore();
+    text(g, t("BEST"), 672, 62, 26, SKIN.muted, "right");
+    fitText(g, Math.max(this.best, 0).toLocaleString(), 672, 126, 36, 190, SKIN.muted, "right");
     // 남은 시간 60·30·10초 기준: 숫자 노랑→주황→빨강, 막대 하늘→보라→빨강
     const tl = Math.max(0, r.timeLeft);
     const danger = tl >= 60 ? 0 : tl >= 30 ? (60 - tl) / 60 : tl >= 10 ? 0.5 + (30 - tl) / 40 : 1;
     const timeCol = danger < 0.5 ? mix(SKIN.timeText, "#ff8c1a", danger * 2) : mix("#ff8c1a", SKIN.warn, (danger - 0.5) * 2);
     const barCol = danger < 0.5 ? mix(SKIN.time, "#b866ff", danger * 2) : mix("#b866ff", SKIN.warn, (danger - 0.5) * 2);
+    text(g, t("TIME"), 360, 40, 24, alpha(SKIN.timeText, 0.8), "center");
     g.save();
-    g.translate(672, 113);
-    const pulse = 1 + (this.timePulse - 1) * 0.35;
+    g.translate(360, 108);
+    const pulse = 1 + (this.timePulse - 1) * 0.5;
     g.scale(pulse, pulse);
-    fitText(g, tl.toFixed(1), 0, 20, 60, 228, timeCol, "right");
+    g.font = font(88);
+    g.textAlign = "center";
+    g.textBaseline = "alphabetic";
+    g.shadowColor = alpha(timeCol, 0.55);
+    g.shadowBlur = 18;
+    g.fillStyle = timeCol;
+    g.fillText(tl.toFixed(1), 0, 30);
     g.restore();
-    const timeBonus = this.floats.some((f) => f.placement === "time" && f.alpha > 0.01);
-    if (this.state === "play" && !timeBonus) fitText(g, t("TARGET_FMT", r.timeTarget()), 672, 177, 29, 272, "#c0ead5", "right");
-    roundRect(g, 48, 202, 624, 8, 4);
-    g.fillStyle = "#30273e"; g.fill();
-    g.fillStyle = barCol;
+    // 시간 막대: 얇은 선 하나
+    g.fillStyle = "rgba(64,217,255,0.12)";
+    g.fillRect(48, 168, 624, 4);
     const barWidth = 624 * Math.min(1, tl / GAME_TIME);
-    if (barWidth > 0) { roundRect(g, 48, 202, barWidth, 8, Math.min(4, barWidth / 2)); g.fill(); }
+    if (barWidth > 0) {
+      g.save();
+      g.fillStyle = barCol;
+      g.shadowColor = barCol;
+      g.shadowBlur = 10;
+      g.fillRect(360 - barWidth / 2, 166, barWidth, 8);
+      g.restore();
+    }
+    const timeBonus = this.floats.some((f) => f.placement === "time" && f.alpha > 0.01);
+    if (this.state === "play" && !timeBonus) fitText(g, t("TARGET_FMT", r.timeTarget()), 360, 210, 26, 400, "#c0ead5", "center");
 
-    // All combo and grade feedback lives in this strip, clear of the board.
-    panel(g, 24, 252, 672, 124, this.inFever ? "#683159" : SKIN.panelBorder, 20);
+    // 콤보·판정 줄: 상자 없이 위아래 얇은 선(피버 땐 분홍)
+    const lineCol = this.inFever ? SKIN.tiers[3] : SKIN.muted;
+    accentLine(g, 24, 244, 672, lineCol);
+    accentLine(g, 24, 380, 672, lineCol);
     const c = this.comboText;
     if (c.alpha > 0.01 && c.text) {
       g.save();
@@ -1200,7 +1318,7 @@ export class Game {
     // Time bonuses temporarily replace the target, keeping the HUD gutter clear.
     if (f.placement === "time") {
       g.save(); g.translate(0, PLAY_OY); g.globalAlpha = Math.max(0, Math.min(1, f.alpha));
-      text(g, f.lines[0].text, 672, 177, 32, f.lines[0].color, "right", f.lines[0].color);
+      text(g, f.lines[0].text, 360, 212, 32, f.lines[0].color, "center", f.lines[0].color);
       g.restore();
       return;
     }
@@ -1232,8 +1350,10 @@ export class Game {
     shade.addColorStop(0.65, "rgba(9,7,21,0.7)");
     shade.addColorStop(1, "rgba(9,7,21,0.22)");
     g.fillStyle = shade; g.fillRect(16, 392, 688, 640);
-    text(g, t(this.pauseLock > 0 ? "RESUME_READY" : "COUNTDOWN_READY"), 360, 536, 34, SKIN.accent, "center");
-    accentLine(g, 280, 568, 160);
+    if (this.pauseLock > 0) {
+      text(g, t("RESUME_READY"), 360, 536, 34, SKIN.accent, "center");
+      accentLine(g, 280, 568, 160);
+    }
     g.restore();
   }
 
@@ -1241,7 +1361,13 @@ export class Game {
     const b = PAUSE_BTN;
     const locked = this.state === "countdown" || this.pauseLock > 0;
     g.save();
-    panel(g, b.x, b.y, b.w, b.h, SKIN.panelBorder, 24);
+    g.beginPath();
+    g.arc(b.x + b.w / 2, b.y + b.h / 2, 32, 0, Math.PI * 2);
+    g.fillStyle = "rgba(9,7,21,0.6)";
+    g.fill();
+    g.lineWidth = 2.5;
+    g.strokeStyle = alpha(SKIN.text, 0.35);
+    g.stroke();
     if (locked) {
       // A lock silhouette plus the progress ring explains why pause is unavailable.
       g.strokeStyle = SKIN.timeText; g.lineWidth = 4;
@@ -1251,8 +1377,8 @@ export class Game {
       g.fillStyle = SKIN.panel; g.fillRect(b.x + 40, b.y + 42, 4, 8);
     } else {
       g.fillStyle = SKIN.text;
-      g.fillRect(b.x + 31, b.y + 28, 8, 28);
-      g.fillRect(b.x + 45, b.y + 28, 8, 28);
+      g.fillRect(b.x + 32, b.y + 30, 7, 24);
+      g.fillRect(b.x + 45, b.y + 30, 7, 24);
     }
     g.restore();
     // 다시 멈출 수 있을 때까지 남은 시간: 버튼 둘레를 따라 차오르는 빛
@@ -1260,16 +1386,16 @@ export class Game {
       const k = this.state === "play" ? 1 - this.pauseLock / PAUSE_LOCK : 0;
       g.save();
       g.strokeStyle = alpha(SKIN.accent, 0.18); g.lineWidth = 4;
-      g.beginPath(); g.arc(b.x + b.w / 2, b.y + b.h / 2, b.w / 2 + 6, 0, Math.PI * 2); g.stroke();
+      g.beginPath(); g.arc(b.x + b.w / 2, b.y + b.h / 2, 38, 0, Math.PI * 2); g.stroke();
       g.strokeStyle = SKIN.accent;
       g.lineWidth = 4;
       g.lineCap = "round";
       g.shadowColor = SKIN.accent;
       g.shadowBlur = 10;
       g.beginPath();
-      g.arc(b.x + b.w / 2, b.y + b.h / 2, b.w / 2 + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
+      g.arc(b.x + b.w / 2, b.y + b.h / 2, 38, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
       g.stroke();
-      if (this.state === "play") text(g, t("PAUSE_LOCK_FMT", Math.ceil(this.pauseLock)), b.x + b.w / 2, b.y + 123, 26, SKIN.timeText, "center");
+      if (this.state === "play") text(g, t("PAUSE_LOCK_FMT", Math.ceil(this.pauseLock)), b.x - 6, b.y + b.h / 2 + 9, 26, SKIN.timeText, "right");
       g.restore();
     }
   }

@@ -64,6 +64,12 @@ export class BoardView {
   /** 지금 모양으로 가능한 최대 파괴 수(판정 기준) */
   bestN = 0;
   fever = false;
+  /** 0~1: 배경 음악 박자(박 직후 1에서 빠르게 줄어든다). 판 테두리가 숨 쉬듯 밝아진다. */
+  beat = 0;
+  /** 0~1: 피버 색(판 바탕·빈 칸·테두리가 분홍·금색 쪽으로 바뀐다) */
+  feverMix = 0;
+  /** 판 바깥으로 퍼지는 테두리 빛 고리 */
+  private frames: { t: number; max: number; grow: number; color: string }[] = [];
   private blocks: (BlockEnt | null)[] = [];
   private dying: BlockEnt[] = [];
   private tweens = new Tweens();
@@ -219,6 +225,13 @@ export class BoardView {
   update(dt: number): void {
     this.tweens.update(dt);
     if (this.fever) this.feverT += dt;
+    for (const f of this.frames) f.t += dt;
+    this.frames = this.frames.filter((f) => f.t < f.max);
+  }
+
+  /** 크게 부술 때·GO! 때: 판 테두리 모양 빛 고리가 바깥으로 한 번 퍼진다. */
+  frameKick(color: string, grow = 60, max = 0.5): void {
+    this.frames.push({ t: 0, max, grow, color });
   }
 
   draw(g: CanvasRenderingContext2D): void {
@@ -227,12 +240,28 @@ export class BoardView {
     g.scale(this.scale, this.scale);
     const w = this.width, h = this.height;
     // 판과 칸
+    const fm = this.feverMix, beat = this.beat;
     roundRect(g, -12, -12, w + 24, h + 24, 20);
-    g.fillStyle = SKIN.boardBg;
+    g.fillStyle = mix(SKIN.boardBg, "#1c0a24", fm);
     g.fill();
-    g.lineWidth = 3;
-    g.strokeStyle = SKIN.boardBorder;
+    // 테두리: 박자마다 살짝 밝아지고 번진다(피버 땐 분홍)
+    const border = mix("#40d9ff", "#ff40d9", fm);
+    g.save();
+    g.lineWidth = 3 + beat * 1.5;
+    g.strokeStyle = alpha(border, 0.45 + 0.35 * beat);
+    g.shadowColor = border;
+    g.shadowBlur = 4 + 16 * beat;
     g.stroke();
+    g.restore();
+    for (const f of this.frames) {
+      const k = f.t / f.max, e = 1 - (1 - k) ** 3, grow = 6 + f.grow * e;
+      roundRect(g, -12 - grow, -12 - grow, w + 24 + grow * 2, h + 24 + grow * 2, 20 + grow * 0.6);
+      g.lineWidth = 6 * (1 - k) + 1;
+      g.strokeStyle = f.color;
+      g.globalAlpha = (1 - k) * 0.9;
+      g.stroke();
+      g.globalAlpha = 1;
+    }
     if (this.fever) {
       // 테두리를 따라 색이 흐르는 피버 빛
       for (let i = 0; i < 2; i++) {
@@ -244,7 +273,7 @@ export class BoardView {
         g.stroke();
       }
     }
-    g.fillStyle = SKIN.slot;
+    g.fillStyle = fm > 0.01 ? alpha(mix("#40f2ff", "#ffc733", fm), 0.05 + 0.03 * fm) : SKIN.slot;
     for (let y = 0; y < this.model.rows; y++) {
       for (let x = 0; x < this.model.cols; x++) g.fillRect(x * CELL + 6, y * CELL + 6, CELL - 12, CELL - 12);
     }

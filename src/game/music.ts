@@ -220,7 +220,16 @@ export class Music {
   private wanted: "title" | "game" | null = null;
   private feverOn = false;
   private paused = false;
+  /** 게임 곡이 시작된 AudioContext 시각(박자 계산용) */
+  private gameT0 = -1;
   volume = 0.6;
+
+  /** 게임 곡(128 BPM)의 지금 박 안 위치 0~1. 게임 곡이 안 나오면 -1. */
+  beatPhase(): number {
+    if (!this.ctx || !this.sources.game || this.gameT0 < 0) return -1;
+    const b = ((this.ctx.currentTime - this.gameT0) * 128) / 60;
+    return ((b % 1) + 1) % 1;
+  }
 
   /** Sfx와 같은 AudioContext를 받아 곡을 만든다(한 곡씩 나눠 만들어 화면이 멈추지 않게). */
   attach(ctx: AudioContext): void {
@@ -324,6 +333,7 @@ export class Music {
     // 게임 곡과 피버 층은 같은 시각에 시작해 박자를 맞춘다
     const at = ctx.currentTime + 0.02;
     src.start(at);
+    if (tr === "game") this.gameT0 = at;
     if (tr === "game" && this.buffers.fever && !this.sources.fever) {
       this.sources[tr] = src;
       this.gains[tr] = g;

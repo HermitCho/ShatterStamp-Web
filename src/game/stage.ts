@@ -49,10 +49,44 @@ export class StageFx {
     this.feverGlow = 0;
   }
 
-  /** 3, 2, 1, GO! — beat(n)를 3·2·1·0(GO) 때 부르고, 끝나면 done(). 중간에 clear()되면 done을 부르지 않는다. */
-  countdown(beat: (n: number) => void, done: () => void): void {
+  /**
+   * 판 시작: READY? 가 깜빡이다 GO! 도장. 이어하기: 3, 2, 1, GO!
+   * beat(n)를 3·2·1·0(GO) 때 부르고(READY?는 3과 1), 끝나면 done(). 중간에 clear()되면 done을 부르지 않는다.
+   */
+  countdown(beat: (n: number) => void, done: () => void, ready = false): void {
     const run = ++this.run;
     const seq = this.tweens.add();
+    if (ready) {
+      seq.call(() => {
+        beat(3);
+        const b = this.big(t("READY"), 128, "#40f2ff");
+        b.neon = 0;
+        b.scale = 1.5;
+        // 쾅 켜진 뒤 오락실 화면처럼 깜빡인다
+        this.tweens.add()
+          .to(0.12, (k) => {
+            b.scale = 1.5 - 0.5 * k;
+            b.neon = k;
+          }, ease.inQuad)
+          .to(1.3, (k) => (b.neon = Math.floor(k * 1.3 / 0.2) % 2 === 0 ? 1 : 0.3))
+          .to(0.1, (k) => {
+            b.neon = 1 - k;
+            b.scale = 1 + 0.2 * k;
+          })
+          .call(() => this.remove(b));
+      }).wait(0.9).call(() => beat(1)).wait(0.62);
+    } else {
+      this.numbers(seq, beat);
+    }
+    seq.call(() => {
+      if (run !== this.run) return;
+      beat(0);
+      this.go();
+      done();
+    });
+  }
+
+  private numbers(seq: ReturnType<Tweens["add"]>, beat: (n: number) => void): void {
     for (const n of [3, 2, 1]) {
       seq.call(() => {
         beat(n);
@@ -65,12 +99,6 @@ export class StageFx {
         }).call(() => this.remove(b));
       }).wait(0.62);
     }
-    seq.call(() => {
-      if (run !== this.run) return;
-      beat(0);
-      this.go();
-      done();
-    });
   }
 
   /** GO!: 판 없이 글자만, 노란 네온 빛. 쾅 찍히고 지직 깜빡이며 켜졌다가 꺼지듯 사라진다. */

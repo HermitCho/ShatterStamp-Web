@@ -78,6 +78,9 @@ interface ResultAnim {
   scoreA: number;
   scoreScale: number;
   best: number;
+  /** 새 최고 기록 도장(0~1 찍히는 정도, 크기) */
+  stamp: number;
+  stampScale: number;
   rows: { a: number; dx: number; values: number[] }[];
   buttons: number;
 }
@@ -544,8 +547,8 @@ export class Menus {
     if (!r) return;
     const targets = [[r.maxCombo], r.grades.slice(), [r.time], [r.biggest]];
     const an: ResultAnim = {
-      running: true, title: 0, score: 0, scoreA: 0, scoreScale: 1, best: 0,
-      rows: targets.map((v) => ({ a: 0, dx: 60, values: v.map(() => 0) })), buttons: 0,
+      running: true, title: 0, score: 0, scoreA: 0, scoreScale: 1, best: 0, stamp: 0, stampScale: 1,
+      rows: targets.map((v) => ({ a: 0, dx: 180, values: v.map(() => 0) })), buttons: 0,
     };
     this.anim = an;
     const snd = this.actions.sound;
@@ -560,18 +563,24 @@ export class Menus {
       an.score = r.score;
       snd("big", 1.2);
     }).to(0.25, (k) => (an.scoreScale = 1 + 0.25 * Math.sin(k * Math.PI)));
-    seq.call(() => {
-      if (r.newBest) {
-        snd("perfect");
-        this.actions.shake(0.5);
-      }
-    }).to(r.newBest ? 0.14 : 0.2, (k) => {
+    seq.to(0.2, (k) => {
       an.best = Math.min(1, k * 2);
-    }, ease.inQuad).wait(0.3);
+    }, ease.inQuad);
+    // 새 최고 기록: 점수 위에 도장이 쾅
+    if (r.newBest) {
+      seq.call(() => snd("perfect")).to(0.13, (k) => {
+        an.stamp = Math.min(1, k * 2);
+        an.stampScale = 1.9 - 0.9 * k;
+      }, ease.inQuad).call(() => {
+        snd("big", 1.1);
+        this.actions.shake(0.5);
+      });
+    }
+    seq.wait(0.3);
     an.rows.forEach((row, i) => {
-      seq.call(() => snd("pop", 1 + i * 0.12, -4)).to(0.12, (k) => {
-        row.a = k;
-        row.dx = 60 * (1 - ease.outCubic(k));
+      seq.call(() => snd("pop", 1 + i * 0.12, -4)).to(0.2, (k) => {
+        row.a = Math.min(1, k * 1.6);
+        row.dx = 180 * (1 - ease.outCubic(k));
       });
       const has = targets[i].some((v) => v > 0);
       seq.to(0.4, this.counter(0.4, (e) => (row.values = targets[i].map((v) => Math.round(v * e))), has))
@@ -599,7 +608,7 @@ export class Menus {
     const r = this.result, an = this.anim;
     if (!r || !an) return;
     this.tweens.clear();
-    Object.assign(an, { running: false, title: 1, score: r.score, scoreA: 1, scoreScale: 1, best: 1, buttons: 1 });
+    Object.assign(an, { running: false, title: 1, score: r.score, scoreA: 1, scoreScale: 1, best: 1, stamp: r.newBest ? 1 : 0, stampScale: 1, buttons: 1 });
     const targets = [[r.maxCombo], r.grades, [r.time], [r.biggest]];
     an.rows.forEach((row, i) => Object.assign(row, { a: 1, dx: 0, values: targets[i].slice() }));
   }
@@ -682,6 +691,34 @@ export class Menus {
     }
   }
 
+  /** 「NEW BEST!」 기울어진 도장: 점수 오른쪽 위에 크게 떨어져 쾅 */
+  private drawBestStamp(g: CanvasRenderingContext2D, a: number, scale: number): void {
+    const col = SKIN.timeText;
+    g.save();
+    g.globalAlpha *= a;
+    g.translate(566, 296);
+    g.rotate(-0.16);
+    g.scale(scale, scale);
+    roundRect(g, -112, -34, 224, 68, 12);
+    g.fillStyle = "rgba(9,7,21,0.82)";
+    g.fill();
+    g.lineWidth = 5;
+    g.strokeStyle = col;
+    g.shadowColor = col;
+    g.shadowBlur = 14;
+    g.stroke();
+    roundRect(g, -103, -25, 206, 50, 8);
+    g.lineWidth = 2;
+    g.shadowBlur = 0;
+    g.stroke();
+    g.font = font(36);
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillStyle = col;
+    g.fillText("NEW BEST!", 0, 2);
+    g.restore();
+  }
+
   private drawResult(g: CanvasRenderingContext2D): void {
     const r = this.result, an = this.anim, look = this.look;
     if (!r || !an) return;
@@ -696,19 +733,22 @@ export class Menus {
     look.score(g, an.score.toLocaleString(), SKIN.score);
     g.restore();
     g.save(); g.globalAlpha *= an.best;
-    look.lettering(g, r.newBest ? t("NEW_BEST") : t("BEST_FMT", r.best.toLocaleString()), 360, 484, 36, 600, SKIN.timeText);
+    look.lettering(g, t("BEST_FMT", r.best.toLocaleString()), 360, 484, 36, 600, SKIN.timeText);
     if (this.resultRank) {
       // Long service messages wrap at a readable size instead of shrinking.
       wrapText(g, this.resultRank, 360, 542, 600, 30, 38, SKIN.accent, "center");
     }
     g.restore();
+    if (an.stamp > 0) this.drawBestStamp(g, an.stamp, an.stampScale);
     const statX = [160, 0, 360, 560];
     an.rows.forEach((row, i) => {
       if (row.a <= 0) return;
-      g.save(); g.globalAlpha *= row.a; g.translate(0, row.dx * 0.2);
+      // 줄마다 오른쪽에서 미끄러져 들어오고, 그 밑의 기울어진 띠가 왼쪽부터 그어진다
+      const sweep = 1 - row.dx / 180;
+      g.save(); g.globalAlpha *= row.a; g.translate(row.dx, 0);
       if (i === 1) {
         look.lettering(g, t("RESULT_GRADES"), 64, 782, 28, 592, SKIN.muted, "left", false);
-        accentLine(g, 64, 801, 592, SKIN.muted);
+        slantBand(g, 64, 801, 592 * sweep, 4, SKIN.muted);
         const max = Math.max(1, ...r.grades);
         for (let k = 0; k < 4; k++) {
           const x = 64 + k % 2 * 324, y = 846 + Math.floor(k / 2) * 98;
@@ -726,9 +766,28 @@ export class Menus {
         g.translate(x, 690); g.rotate(-0.055); g.translate(-x, -690);
         look.lettering(g, val, x, 700, 46, 170, col);
         g.restore();
-        accentLine(g, x - 56, 726, 112, col);
+        slantBand(g, x - 64, 724, 128 * sweep, 6, col);
       }
       g.restore();
     });
   }
+}
+
+/** 기울어진 얇은 띠(왼쪽부터 그어진다, 오른쪽 끝은 빛이 옅어진다) */
+function slantBand(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string): void {
+  if (w <= 1) return;
+  const grad = g.createLinearGradient(x, 0, x + w, 0);
+  grad.addColorStop(0, alpha(color, 0.9));
+  grad.addColorStop(0.7, alpha(color, 0.55));
+  grad.addColorStop(1, alpha(color, 0));
+  g.save();
+  g.fillStyle = grad;
+  g.beginPath();
+  g.moveTo(x + h, y - h / 2);
+  g.lineTo(x + w + h, y - h / 2);
+  g.lineTo(x + w - h, y + h / 2);
+  g.lineTo(x - h, y + h / 2);
+  g.closePath();
+  g.fill();
+  g.restore();
 }

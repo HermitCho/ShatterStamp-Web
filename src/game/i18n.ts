@@ -1,6 +1,7 @@
 /** 한국어(기본) / 영어 문구. PERFECT·COMBO 같은 게임 용어는 두 언어 모두 영어로 둔다. */
 const TEXT = {
   SCORE: ["점수", "SCORE"],
+  BEST: ["최고", "BEST"],
   TIME: ["시간", "TIME"],
   BEST_FMT: ["최고 %d", "BEST %d"],
   TARGET_FMT: ["%d점 → +1초", "%d PTS → +1s"],
@@ -77,6 +78,7 @@ const TEXT = {
   PERCENT_FMT: ["%d%", "%d%"],
   COMBO_FMT: ["%d COMBO", "%d COMBO"],
   FEVER: ["FEVER ×3", "FEVER ×3"],
+  READY: ["READY?", "READY?"],
   FEVER_END: ["FEVER END", "FEVER END"],
   GO: ["GO!", "GO!"],
   GRADE_PERFECT: ["PERFECT", "PERFECT"],
