@@ -91,7 +91,7 @@ export class Howto {
     fitText(g, t(`HOWTO_C${n}_T` as TextKey), x + 64, y + 34, 34, w - 64, SKIN.text);
     if (kind === 0) {
       wrapText(g, t("HOWTO_C1_B"), x, y + 82, w, 28, 36, "#d0cddd");
-      this.drawSpread(g, x, y + 186, w);
+      this.drawSpread(g, x, y + 156, w);
       return;
     }
     const pic = { x, y: y + 62, w: 194, h: 120 };

@@ -182,10 +182,11 @@ export class Menus {
         draw: (g) => {
           this.look.heading(g, t("HOW_TO_PLAY"));
           text(g, t("HOWTO_SUB"), W / 2, 196, 28, SKIN.muted, "center");
-          this.howto.drawSection(g, 0, 60, 244, 600);
-          this.howto.drawSection(g, 1, 60, 686, 600);
-          this.howto.drawSection(g, 2, 60, 924, 600);
-          fitText(g, t("HOWTO_KEYS"), W / 2, 1146, 25, 624, SKIN.muted, "center");
+          // 세 단락을 고른 간격으로 위에서부터 채우고, 조작 안내와 뒤로 버튼 사이에 숨 쉴 틈을 둔다
+          this.howto.drawSection(g, 0, 60, 236, 600);
+          this.howto.drawSection(g, 1, 60, 648, 600);
+          this.howto.drawSection(g, 2, 60, 870, 600);
+          fitText(g, t("HOWTO_KEYS"), W / 2, 1098, 25, 624, SKIN.muted, "center");
         },
       },
       settings: {
