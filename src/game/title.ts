@@ -14,9 +14,9 @@ const PINK = "#ff47d9";
 const TOP_SIZE = 100, STAMP_SIZE = 104, GAP = 4;
 const GATHER_TIME = 0.42, STAGGER = 0.05, SLAM_AT = 0.78, SLAM_TIME = 0.14;
 const SLANT = -0.22;
-/** 로고 위치(Godot의 로고 상자 y=150 기준) */
-const LOGO_Y = 100;
-const HORIZON = 1070;
+/** Leave a measured pause between the logo impression and the two title actions. */
+const LOGO_Y = 124;
+const HORIZON = 1140;
 const LOGO_ZONE = { x: 40, y: 120, w: 640, h: 440 };
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -38,8 +38,8 @@ export class TitleScreen {
   private bt = 0;
 
   constructor() {
-    for (let i = 0; i < 70; i++) this.stars.push({ x: Math.random() * W, y: Math.random() * HORIZON * 0.9, r: rand(0.6, 1.8), ph: Math.random() * 6.28 });
-    for (let i = 0; i < 10; i++) this.floaters.push(this.newFloater(true));
+    for (let i = 0; i < 54; i++) this.stars.push({ x: Math.random() * W, y: Math.random() * HORIZON * 0.9, r: rand(0.6, 1.6), ph: Math.random() * 6.28 });
+    for (let i = 0; i < 8; i++) this.floaters.push(this.newFloater(true));
   }
 
   /** 글꼴이 준비된 뒤 글자 폭을 잰다. */
@@ -119,9 +119,10 @@ export class TitleScreen {
   private newFloater(anywhere: boolean): Floater {
     const depth = rand(0.35, 1);
     return {
-      x: rand(20, W - 20), y: anywhere ? rand(80, H) : H + 60, v: -rand(18, 45) * depth,
-      rot: Math.random() * 6.28, rv: rand(-0.6, 0.6), s: 34 + 34 * depth, a: 0.15 + 0.4 * depth,
-      c: Math.floor(Math.random() * 5), life: rand(4, 14),
+      x: Math.random() < 0.5 ? rand(24, 132) : rand(W - 132, W - 24),
+      y: anywhere ? rand(140, H) : H + 60, v: -rand(12, 28) * depth,
+      rot: Math.random() * 6.28, rv: rand(-0.18, 0.18), s: 28 + 28 * depth, a: 0.12 + 0.2 * depth,
+      c: Math.floor(Math.random() * 5), life: rand(24, 48),
     };
   }
 
@@ -130,12 +131,19 @@ export class TitleScreen {
   drawBackdrop(g: CanvasRenderingContext2D): void {
     const sky = g.createLinearGradient(0, 0, 0, HORIZON);
     sky.addColorStop(0, "#080517");
-    sky.addColorStop(0.6, "#120621");
-    sky.addColorStop(1, "#290833");
+    sky.addColorStop(0.55, "#10081d");
+    sky.addColorStop(1, "#190a25");
     g.fillStyle = sky;
     g.fillRect(0, 0, W, HORIZON);
+    // Broad pools of logo-coloured light give the open composition depth.
+    for (const [x, y, radius, color] of [[180, 250, 370, "rgba(55,194,228,0.07)"], [520, 420, 390, "rgba(239,61,197,0.08)"]] as const) {
+      const halo = g.createRadialGradient(x, y, 0, x, y, radius);
+      halo.addColorStop(0, color); halo.addColorStop(1, "rgba(9,7,21,0)");
+      g.fillStyle = halo; g.fillRect(0, 0, W, HORIZON);
+    }
     for (const s of this.stars) {
-      g.globalAlpha = 0.15 + 0.35 * (0.5 + 0.5 * Math.sin(this.bt * 1.7 + s.ph));
+      const quiet = s.x > 150 && s.x < 570 && s.y > 520 ? 0.3 : 1;
+      g.globalAlpha = (0.08 + 0.2 * (0.5 + 0.5 * Math.sin(this.bt * 0.8 + s.ph))) * quiet;
       g.fillStyle = "#ccf2ff";
       g.beginPath();
       g.arc(s.x, s.y, s.r, 0, 6.28);
@@ -147,15 +155,19 @@ export class TitleScreen {
     g.fillRect(0, HORIZON, W, H - HORIZON);
     const glow = g.createLinearGradient(0, HORIZON - 70, 0, HORIZON + 56);
     glow.addColorStop(0, "rgba(255,64,217,0)");
-    glow.addColorStop(0.55, "rgba(255,64,217,0.16)");
+    glow.addColorStop(0.55, "rgba(255,64,217,0.08)");
     glow.addColorStop(1, "rgba(255,64,217,0)");
     g.fillStyle = glow;
     g.fillRect(0, HORIZON - 70, W, 126);
-    g.strokeStyle = "rgba(255,64,217,0.4)";
-    g.lineWidth = 2;
+    const horizon = g.createLinearGradient(0, 0, W, 0);
+    horizon.addColorStop(0, "rgba(255,64,217,0)");
+    horizon.addColorStop(0.5, "rgba(255,64,217,0.28)");
+    horizon.addColorStop(1, "rgba(255,64,217,0)");
+    g.strokeStyle = horizon;
+    g.lineWidth = 1.5;
     line(g, 0, HORIZON, W, HORIZON);
     // 세로선: 소실점으로 모인다
-    g.strokeStyle = "rgba(64,230,255,0.14)";
+    g.strokeStyle = "rgba(64,230,255,0.06)";
     g.lineWidth = 1.5;
     for (let i = -12; i <= 12; i++) line(g, W / 2, HORIZON, W / 2 + i * 110, H);
     // 가로선: 앞으로 흘러온다(가까울수록 간격이 넓다)
@@ -163,7 +175,7 @@ export class TitleScreen {
     for (let i = 0; i < 12; i++) {
       const z = (i + 1 - scroll) / 12;
       const y = HORIZON + depth * z * z;
-      g.strokeStyle = `rgba(64,230,255,${0.04 + 0.2 * z})`;
+      g.strokeStyle = `rgba(64,230,255,${0.025 + 0.06 * z})`;
       g.lineWidth = 1 + 1.5 * z;
       line(g, 0, y, W, y);
     }
@@ -189,6 +201,10 @@ export class TitleScreen {
       g.fillRect(-f.s * 0.16, -f.s * 0.16, f.s * 0.32, f.s * 0.32);
       g.restore();
     }
+    const floorFade = g.createLinearGradient(0, HORIZON, 0, H);
+    floorFade.addColorStop(0, "rgba(8,5,16,0)");
+    floorFade.addColorStop(1, "rgba(8,5,16,0.85)");
+    g.fillStyle = floorFade; g.fillRect(0, HORIZON, W, H - HORIZON);
   }
 
   drawLogo(g: CanvasRenderingContext2D): void {
@@ -197,7 +213,7 @@ export class TitleScreen {
       this.pendingScatter = false;
       for (const l of this.letters) this.scatter(l);
     }
-    const dim = this.flicker > 0 && this.flicker % 0.11 > 0.055 ? 0.35 : 1;
+    const dim = this.flicker > 0 && this.flicker % 0.11 > 0.055 ? 0.84 : 1;
     const baseY = LOGO_Y + 128;
     this.letters.forEach((l, i) => {
       const p = Math.min(1, Math.max(0, (this.t - i * STAGGER) / GATHER_TIME));
@@ -251,7 +267,7 @@ export class TitleScreen {
     if (p <= 0) return;
     let sc = 2.6 + (1 - 2.6) * p * p;
     if (this.slamDone) {
-      sc = 1 + 0.015 * Math.sin(this.t * 2.2);
+      sc = 1 + 0.008 * Math.sin(this.t * 1.5);
       const since = this.t - SLAM_AT - SLAM_TIME;
       if (since < 0.2) sc *= 1 - 0.06 * Math.sin((since / 0.2) * Math.PI);
     }

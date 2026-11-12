@@ -1,3 +1,4 @@
+import { touchUI } from "./device.ts";
 import { bestMove } from "../core/bot.ts";
 import { GAME_TIME, GameRules, Grade, STAMP_COOLDOWN, tierFor, type BreakResult } from "../core/game-rules.ts";
 import { BOARD_COLORS, BOARD_COLS, BOARD_ROWS, localSeed, newBoard, newQueue, REPLAY_VERSION, type ReplayEvent } from "../core/replay.ts";
@@ -23,19 +24,30 @@ export const H = 1280;
 const COLS = BOARD_COLS, ROWS = BOARD_ROWS, COLORS = BOARD_COLORS;
 /** 받아 둔 판 표(시드)를 이 시간이 지나면 버리고 새로 받는다(서버는 6시간 뒤 만료) */
 const TICKET_MAX_AGE = 3 * 3600 * 1000;
-const BOARD_X = 24, BOARD_Y = 400, BOARD_SCALE = 0.8;
-const SIDE_X = 552, SIDE_W = 148;
+/** 플레이 화면 전체를 아래로 내리는 양(아래 안내 상자를 없앤 만큼 위아래 여백을 고르게) */
+export const PLAY_OY = 72;
+/** 판 테두리(보드 밖 12칸 단위)까지 포함해 왼쪽 끝이 위 상자들과 맞도록 */
+const BOARD_SCALE = 0.78, BOARD_PAD = 12 * BOARD_SCALE;
+const BOARD_X = 24 + BOARD_PAD, BOARD_Y = 400 + PLAY_OY;
+/** 오른쪽 모양 칸: 오른쪽 끝을 위 상자들(24~696)과 맞춘다 */
+const SIDE_X = 556, SIDE_W = 140;
 const NEXT_COUNT = 4;
 
 type State = "title" | "tutorial" | "countdown" | "play" | "pause" | "result";
 const TUT_TOTAL = 4;
 
 /** 상단 가운데 일시정지 버튼 */
-const PAUSE_BTN = { x: 318, y: 52, w: 84, h: 84 };
+const PAUSE_BTN = { x: 318, y: 52 + PLAY_OY, w: 84, h: 84 };
 /** 이어하기 뒤 다시 멈출 수 있기까지의 시간(초). 멈춤·이어하기를 반복해 생각할 시간을 버는 꼼수를 줄인다. */
 const PAUSE_LOCK = 3;
 
 interface Rect { x: number; y: number; w: number; h: number }
+
+/** 들어오는 연출 0→1 (delay초 뒤 0.38초 동안, 끝에서 살짝 감속) */
+function introEase(t: number, delay: number): number {
+  const k = Math.min(1, Math.max(0, (t - delay) / 0.38));
+  return 1 - (1 - k) ** 3;
+}
 
 /** 오른쪽 세로 줄의 모양 칸(HOLD / NOW / NEXT) */
 interface Slot extends Rect {
@@ -94,7 +106,8 @@ export class Game {
   private lastTick = -1;
   private pressing = false;
   private clock = 0;
-  private readonly touchControls = matchMedia("(pointer: coarse)");
+  /** 판 시작 뒤 지난 시간(위 상자·오른쪽 칸이 차례로 들어오는 연출) */
+  private intro = 9;
   private shakeOn = true;
   /** 판마다 1씩 늘린다. 판이 바뀐 뒤 늦게 도착한 예약 동작(결과 화면 열기 등)을 무시하는 데 쓴다. */
   private run = 0;
@@ -185,14 +198,15 @@ export class Game {
     });
     this.menus.best = this.best;
     this.applySettings(this.menus.settings);
-    let y = BOARD_Y;
+    // 오른쪽 줄의 위아래 끝도 판 테두리와 맞춘다
+    let y = Math.round(BOARD_Y - BOARD_PAD);
     this.hold = this.slot("HOLD", y, 118, 20, false);
-    this.hold.hint = "HOLD_HINT";
+    this.hold.hint = "empty";
     y += 128;
     this.now = this.slot("NOW", y, 170, 30, true);
-    y += 178 + 28;
+    y += 170 + 10;
     for (let i = 0; i < NEXT_COUNT; i++) {
-      const h = i === 0 ? 104 : 56;
+      const h = i === 0 ? 104 : 50;
       const s = this.slot("", y, h, i === 0 ? 20 : 11, false);
       s.alpha = 1 - 0.15 * i;
       this.nexts.push(s);
@@ -458,6 +472,7 @@ export class Game {
 
   start(): void {
     this.run++;
+    this.intro = 0;
     this.menus.close();
     this.floats = [];
     this.trauma = 0;
@@ -526,7 +541,7 @@ export class Game {
       this.tutAccepting = true;
       this.tutorial.show(this.tutStep, TUT_TOTAL, `TUT_${this.tutStep}` as "TUT_1", this.bestCells());
     } else if (this.tutStep === 4) {
-      this.tutorial.show(4, TUT_TOTAL, "TUT_4", [], this.hold);
+      this.tutorial.show(4, TUT_TOTAL, touchUI() ? "TUT_4" : "TUT_4_PC", [], this.hold);
     } else {
       this.tutorial.show(TUT_TOTAL + 1, TUT_TOTAL, "TUT_5", []);
       const run = this.run;
@@ -947,6 +962,7 @@ export class Game {
 
   update(realDt: number): void {
     this.clock += realDt;
+    this.intro += realDt;
     let dt = realDt;
     if (this.hitstop > 0) {
       this.hitstop -= realDt;
@@ -1057,6 +1073,16 @@ export class Game {
   }
 
   private drawHud(g: CanvasRenderingContext2D): void {
+    g.save();
+    // 판이 시작되면 위 상자들이 위에서 내려앉는다
+    const k = introEase(this.intro, 0);
+    g.globalAlpha *= k;
+    g.translate(0, PLAY_OY - 48 * (1 - k));
+    this.drawHudPanels(g);
+    g.restore();
+  }
+
+  private drawHudPanels(g: CanvasRenderingContext2D): void {
     const r = this.rules;
     panel(g, 24, 24, 672, 206);
     text(g, t("SCORE"), 48, 67, 27, SKIN.score, "left");
@@ -1085,7 +1111,6 @@ export class Game {
     // All combo and grade feedback lives in this strip, clear of the board.
     panel(g, 24, 252, 672, 124, this.inFever ? "#683159" : SKIN.panelBorder, 20);
     const c = this.comboText;
-    if (!this.inFever) text(g, t("ARCADE_TAG"), 48, 292, 26, SKIN.muted, "left");
     if (c.alpha > 0.01 && c.text) {
       g.save();
       g.globalAlpha = c.alpha;
@@ -1100,28 +1125,29 @@ export class Game {
       g.fillRect(440, 304, 220 * k, 4);
       g.globalAlpha = 1;
     }
-    if (!this.gradeFloat || this.gradeFloat.alpha <= 0.01) {
-      fitText(g, t("PLAY_HINT"), 360, 349, 28, 624, SKIN.muted, "center");
-    }
-    const touch = this.touchControls.matches;
-    if (this.state !== "tutorial") {
-      panel(g, 24, 1070, 672, 114);
-      fitText(g, t(this.state === "countdown" ? "COUNTDOWN_HINT" : touch ? "TOUCH_HINT" : "FOOTER"), 360, 1117, 29, 624, SKIN.text, "center");
-      fitText(g, t(touch ? "TOUCH_HOLD" : "FOOTER_PAUSE"), 360, 1158, 28, 624, SKIN.muted, "center");
-    } else fitText(g, t(touch ? "TOUCH_HINT" : "HOWTO_KEYS"), 360, 1260, 24, 672, SKIN.muted, "center");
   }
 
   private drawSlots(g: CanvasRenderingContext2D): void {
-    for (const s of [this.hold, this.now, ...this.nexts]) {
+    [this.hold, this.now, ...this.nexts].forEach((s, i) => {
       g.save();
-      g.globalAlpha = s.alpha;
+      // 오른쪽 칸들은 하나씩 옆에서 미끄러져 들어온다
+      const k = introEase(this.intro, 0.1 + i * 0.05);
+      g.globalAlpha = s.alpha * k;
+      g.translate(60 * (1 - k), 0);
       panel(g, s.x, s.y, s.w, s.h, s.highlight ? "#b94ca8" : SKIN.panelBorder, 16);
       let top = 0;
       if (s.title) {
         text(g, t(s.title as "HOLD" | "NOW"), s.x + s.w / 2, s.y + 34, 27, s.highlight ? SKIN.score : SKIN.text, "center");
         top = 42;
       }
-      if (s.hint && s.cells.length === 0) t(s.hint as "HOLD_HINT").split("\n").forEach((line, i) => text(g, line, s.x + s.w / 2, s.y + 74 + i * 30, 28, "#c5c3d6", "center"));
+      if (s.hint && s.cells.length === 0) {
+        // 빈 홀드 칸: 글자 대신 점선 빈 자리 하나
+        g.save();
+        g.strokeStyle = "rgba(197,195,214,0.45)"; g.lineWidth = 3; g.setLineDash([8, 7]);
+        roundRect(g, s.x + s.w / 2 - 26, s.y + top + (s.h - top) / 2 - 30, 52, 52, 8);
+        g.stroke();
+        g.restore();
+      }
       g.beginPath();
       g.rect(s.x, s.y, s.w, s.h);
       g.clip();
@@ -1132,8 +1158,7 @@ export class Game {
         g.fillRect(s.x + (s.w - w) / 2, s.y + s.h - 18, w, 6);
       }
       g.restore();
-    }
-    text(g, t("NEXT"), SIDE_X + SIDE_W / 2, this.nexts[0].y - 8, 26, SKIN.muted, "center");
+    });
   }
 
   private drawPiece(g: CanvasRenderingContext2D, s: Slot, top: number): void {
@@ -1164,6 +1189,7 @@ export class Game {
     if (f.placement === "grade") {
       if (f !== this.gradeFloat) return;
       g.save();
+      g.translate(0, PLAY_OY);
       g.globalAlpha = Math.max(0, Math.min(1, f.alpha));
       fitText(g, f.lines[0].text, 48, 349, 32, f.lines.length > 2 ? 250 : 420, f.lines[0].color);
       fitText(g, f.lines[1].text, 672, 349, 32, 160, f.lines[1].color, "right");
@@ -1173,7 +1199,7 @@ export class Game {
     }
     // Time bonuses temporarily replace the target, keeping the HUD gutter clear.
     if (f.placement === "time") {
-      g.save(); g.globalAlpha = Math.max(0, Math.min(1, f.alpha));
+      g.save(); g.translate(0, PLAY_OY); g.globalAlpha = Math.max(0, Math.min(1, f.alpha));
       text(g, f.lines[0].text, 672, 177, 32, f.lines[0].color, "right", f.lines[0].color);
       g.restore();
       return;
@@ -1200,6 +1226,7 @@ export class Game {
   private drawCountdownBackdrop(g: CanvasRenderingContext2D): void {
     // The board remains visible while the numeral gets a quiet focal area.
     g.save();
+    g.translate(0, PLAY_OY);
     const shade = g.createRadialGradient(360, 720, 50, 360, 720, 440);
     shade.addColorStop(0, "rgba(9,7,21,0.88)");
     shade.addColorStop(0.65, "rgba(9,7,21,0.7)");
@@ -1242,7 +1269,7 @@ export class Game {
       g.beginPath();
       g.arc(b.x + b.w / 2, b.y + b.h / 2, b.w / 2 + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
       g.stroke();
-      if (this.state === "play") text(g, t("PAUSE_LOCK_FMT", Math.ceil(this.pauseLock)), b.x + b.w / 2, 175, 26, SKIN.timeText, "center");
+      if (this.state === "play") text(g, t("PAUSE_LOCK_FMT", Math.ceil(this.pauseLock)), b.x + b.w / 2, b.y + 123, 26, SKIN.timeText, "center");
       g.restore();
     }
   }

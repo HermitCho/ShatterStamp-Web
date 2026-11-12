@@ -8,9 +8,10 @@ import { t } from "./i18n.ts";
  * 판 전체에 걸친 큰 연출: 시작 카운트다운(3·2·1·GO!), TIME UP, 피버 배지와 FEVER END, 화면 가장자리 빛.
  * HUD 위, 메뉴 아래에 그린다. 글자는 두 언어 모두 영어(연출 문구 규칙).
  */
-const W = 720, H = 1280, CENTER_Y = 720;
+/** 큰 글자 중심: 판 한가운데(플레이 화면을 내린 만큼 함께) */
+const W = 720, H = 1280, CENTER_Y = 752;
 /** 피버 배지 자리: 보드 위쪽 빈 공간(보드를 가리지 않는다) */
-const BADGE_Y = 280;
+const BADGE_Y = 280 + 72; // 플레이 화면을 내린 만큼(PLAY_OY)
 const GO_COLOR = "#ffd133";
 
 interface Big {

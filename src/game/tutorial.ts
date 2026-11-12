@@ -7,7 +7,7 @@ import { alpha, SKIN } from "./skin.ts";
  * 첫 판 안내 상자 + "여기 찍어 보세요" 표시 + 건너뛰기 버튼.
  * 진행(언제 다음 단계로 갈지)은 Game이 정하고, 여기서는 그리기와 건너뛰기 버튼 판정만 한다.
  */
-const BOX = { x: 24, y: 1042, w: 672, h: 190 };
+const BOX = { x: 24, y: 1058, w: 672, h: 184 };
 const SKIP = { x: BOX.x + BOX.w - 180, y: BOX.y + 6, w: 164, h: 76 };
 
 export interface Rect {

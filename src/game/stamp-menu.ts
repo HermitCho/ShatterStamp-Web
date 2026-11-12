@@ -17,6 +17,8 @@ interface Action {
   profile?: boolean;
   /** 탭이면: 지금 보고 있는 탭인지 */
   tab?: () => boolean;
+  /** 글자 대신 그림 하나만 있는 작은 단추(타이틀 구석의 설정·게임 방법) */
+  icon?: "gear" | "help";
 }
 
 export interface StampFootprint {
@@ -29,6 +31,15 @@ const HEIGHT = 88, ANGLE = -0.055, RADIUS = 18;
 const GLIDE = 0.14, PRESS = 0.05, RELEASE = 0.09;
 const ROW_WIDTH = 652, TRACK_WIDTH = 496, TRACK_Y = 18;
 const PRIMARY_SIZE = 58;
+/** 이만큼(빈 틈)보다 가까운 항목 사이만 도장이 미끄러져 간다 */
+const NEAR_GAP = 70;
+
+/** 두 도장 자리 사이의 빈 틈(가장자리끼리의 거리) */
+function edgeGap(a: StampFootprint, b: StampFootprint): number {
+  const dx = Math.max(0, Math.abs(a.x - b.x) - (a.width + b.width) / 2);
+  const dy = Math.max(0, Math.abs(a.y - b.y) - HEIGHT);
+  return Math.hypot(dx, dy);
+}
 
 /** One travelling START stamp; drawing and picking share its landing footprints. */
 export class StampMenu {
@@ -59,7 +70,7 @@ export class StampMenu {
   buttonFootprint(b: Action): StampFootprint {
     return {
       x: b.x ?? 360, y: b.y + 46,
-      width: b.width ?? (b.value ? ROW_WIDTH : Math.min(540, Math.max(b.small ? 240 : 300,
+      width: b.icon ? 96 : b.width ?? (b.value ? ROW_WIDTH : Math.min(540, Math.max(b.small ? 240 : 300,
         this.width(b.label(), b.primary ? PRIMARY_SIZE : b.small ? 29 : 36, b.primary ? 900 : 700) + 100))),
     };
   }
@@ -101,9 +112,13 @@ export class StampMenu {
     }
     if (selected !== this.selected || target.x !== this.target.x
       || target.y !== this.target.y || target.width !== this.target.width) {
-      // Retarget from the visible impression, even in the middle of a glide/press.
-      this.from = { ...this.frame };
-      this.fromScale = this.scale;
+      // 붙어 있는 항목 사이는 도장이 미끄러져 가고, 멀리 떨어진 항목으로는
+      // 화면을 가로지르지 않고 그 자리에 새로 쾅 찍힌다.
+      const near = edgeGap(this.frame, target) <= NEAR_GAP;
+      this.from = near ? { ...this.frame } : { ...target };
+      if (!near) this.frame = { ...target };
+      this.fromScale = near ? this.scale : 1.3;
+      this.scale = this.fromScale;
       this.target = { ...target };
       this.selected = selected;
       this.elapsed = 0;
@@ -124,6 +139,12 @@ export class StampMenu {
       const p = Math.min(1, (this.elapsed - GLIDE - PRESS) / RELEASE);
       this.scale = 0.97 + 0.03 * (1 - (1 - p) ** 3);
     }
+  }
+
+  /** 화면이 열릴 때: 도장이 크게 들렸다가 제자리에 쾅 찍힌다 */
+  slam(): void {
+    this.fromScale = this.scale = 1.4;
+    this.elapsed = 0;
   }
 
   pressSelection(): void {
@@ -181,26 +202,30 @@ export class StampMenu {
     g.restore();
   }
 
-  private primary(g: CanvasRenderingContext2D, label: string, width: number): void {
+  private primary(g: CanvasRenderingContext2D, label: string, width: number, calm = false): void {
     const size = PRIMARY_SIZE * Math.min(1,
       (width - 64) / Math.max(1, this.width(label, PRIMARY_SIZE)));
     g.font = font(size, 900); g.textAlign = "center"; g.textBaseline = "alphabetic";
     const baseline = size * 0.34;
-    const breath = 0.5 - 0.5 * Math.cos(this.clock * Math.PI * 2 / 1.6);
+    const breath = 0.5 - 0.5 * Math.cos(this.clock * Math.PI * 2 / (calm ? 3.6 : 1.6));
     g.fillStyle = SKIN.accent; g.shadowColor = SKIN.accent;
     g.save();
     g.globalAlpha *= 0.32 + breath * 0.1;
-    g.shadowBlur = 22 + breath * 8;
+    g.shadowBlur = (calm ? 16 : 22) + breath * 8;
     g.fillText(label, 0, baseline);
     g.restore();
     g.shadowBlur = 7 + breath * 3;
     g.fillText(label, 0, baseline);
   }
 
-  button(g: CanvasRenderingContext2D, b: Action, i: number, active: boolean): void {
+  button(g: CanvasRenderingContext2D, b: Action, i: number, active: boolean, title = false): void {
     const f = this.buttonFootprint(b);
     g.save(); this.transform(g, f);
-    if (b.primary) {
+    if (title) {
+      this.titleButton(g, b, f.width, active);
+    } else if (b.icon) {
+      this.icon(g, b.icon, active);
+    } else if (b.primary) {
       this.primary(g, b.label(), f.width);
     } else if (b.profile && b.value) {
       ellipsisText(g, b.value(), 0, -3, 32, f.width - 60, SKIN.accent, "center");
@@ -225,6 +250,114 @@ export class StampMenu {
       g.font = font(size, 700); g.textAlign = "center"; g.textBaseline = "alphabetic";
       g.fillStyle = active ? SKIN.accent : b.small ? SKIN.muted : SKIN.text;
       g.fillText(b.label(), 0, 13);
+    }
+    g.restore();
+  }
+
+  /** Title-only ink details; the travelling frame and its hit footprints stay shared. */
+  private titleButton(g: CanvasRenderingContext2D, b: Action, width: number, active: boolean): void {
+    if (b.icon) {
+      this.titleIcon(g, b.icon, active);
+    } else if (b.primary) {
+      this.primary(g, b.label(), width, true);
+      // START keeps an open ink underline when the selection moves away.
+      if (!active) accentLine(g, -width / 2 + 28, 36, width - 56);
+    } else if (b.profile && b.value) {
+      ellipsisText(g, b.value(), 0, -4, 30, width - 64, active ? SKIN.accent : "#c4e3ed", "center");
+      const label = b.label(), size = 24;
+      const labelWidth = this.width(label, size);
+      this.lettering(g, label, -10, 29, size, width - 80, active ? SKIN.accent : SKIN.muted, "center", false);
+      // A small nib makes the entire nickname line read as an edit action.
+      g.save();
+      g.translate(labelWidth / 2 + 9, 21); g.rotate(-0.65);
+      g.fillStyle = active ? SKIN.accent : SKIN.muted;
+      g.fillRect(-3, -8, 6, 12);
+      g.beginPath(); g.moveTo(-3, 6); g.lineTo(3, 6); g.lineTo(0, 10); g.fill();
+      g.restore();
+    } else {
+      const col = active ? SKIN.accent : "#edb9df";
+      const size = 36;
+      const labelWidth = Math.min(width - 108, this.width(b.label(), size, 700));
+      // The podium and label form one centred, consistently sized secondary action.
+      const left = -(labelWidth + 50) / 2;
+      g.fillStyle = col;
+      g.shadowColor = alpha(col, 0.5); g.shadowBlur = active ? 10 : 4;
+      for (const [dx, h] of [[0, 13], [11, 25], [22, 18]]) g.fillRect(left + dx, 12 - h, 7, h);
+      g.shadowBlur = 0;
+      this.lettering(g, b.label(), 25, 13, size, width - 108, col, "center", active);
+      accentLine(g, -width / 2 + 24, 35, width - 48, active ? SKIN.accent : SKIN.score);
+      g.fillStyle = alpha(active ? SKIN.accent : SKIN.score, 0.65);
+      g.fillRect(width / 2 - 34, 32, 5, 3);
+      g.fillRect(width / 2 - 24, 31, 2, 2);
+    }
+  }
+
+  /** Cropped registration marks and offset ink tie the utilities to the logo stamp. */
+  private titleIcon(g: CanvasRenderingContext2D, kind: "gear" | "help", active: boolean): void {
+    const col = active ? SKIN.accent : "#a9cedd";
+    g.save();
+    g.strokeStyle = alpha(active ? SKIN.accent : SKIN.score, active ? 0.9 : 0.6);
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(-32, -13); g.lineTo(-32, -29); g.lineTo(-16, -29);
+    g.moveTo(16, 29); g.lineTo(32, 29); g.lineTo(32, 13);
+    g.stroke();
+    g.fillStyle = alpha(SKIN.score, 0.5); g.fillRect(25, -28, 4, 3);
+    g.fillRect(-28, 24, 3, 2);
+    const glyph = () => {
+      if (kind === "help") {
+        g.beginPath();
+        g.moveTo(-11, -10);
+        g.bezierCurveTo(-11, -25, 14, -25, 14, -10);
+        g.bezierCurveTo(14, -1, 0, -2, 0, 8);
+        g.stroke();
+        g.fillRect(-3, 17, 6, 6);
+      } else {
+        g.beginPath();
+        for (let i = 0; i < 32; i++) {
+          const a = (i - 0.5) * Math.PI / 16;
+          const r = i % 4 < 2 ? 23 : 17;
+          const x = Math.cos(a) * r, y = Math.sin(a) * r;
+          if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+        }
+        g.closePath(); g.stroke();
+        g.strokeRect(-5, -5, 10, 10);
+      }
+    };
+    g.lineWidth = kind === "help" ? 4.5 : 3;
+    g.lineJoin = "round"; g.lineCap = "round";
+    g.save();
+    g.translate(2, 2);
+    g.strokeStyle = alpha(SKIN.score, 0.3); g.fillStyle = alpha(SKIN.score, 0.3);
+    glyph(); g.restore();
+    g.strokeStyle = col; g.fillStyle = col;
+    g.shadowColor = col; g.shadowBlur = active ? 12 : 4;
+    glyph();
+    g.restore();
+  }
+
+  /** 네온 선으로 그린 톱니바퀴 / 물음표 */
+  private icon(g: CanvasRenderingContext2D, kind: "gear" | "help", active: boolean): void {
+    const col = active ? SKIN.accent : SKIN.text;
+    g.save();
+    g.rotate(-ANGLE); // 그림은 똑바로
+    g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 5; g.lineCap = "round"; g.lineJoin = "round";
+    g.shadowColor = alpha(col, 0.7); g.shadowBlur = active ? 14 : 6;
+    if (kind === "gear") {
+      g.rotate(this.clock * (active ? 0.9 : 0.25));
+      g.beginPath();
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        g.moveTo(Math.cos(a) * 15, Math.sin(a) * 15);
+        g.lineTo(Math.cos(a) * 22, Math.sin(a) * 22);
+      }
+      g.stroke();
+      g.beginPath(); g.arc(0, 0, 14, 0, Math.PI * 2); g.stroke();
+      g.beginPath(); g.arc(0, 0, 5, 0, Math.PI * 2); g.fill();
+    } else {
+      g.beginPath(); g.arc(0, 0, 22, 0, Math.PI * 2); g.stroke();
+      g.font = font(30, 900); g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText("?", 0, 2);
     }
     g.restore();
   }

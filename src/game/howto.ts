@@ -1,3 +1,4 @@
+import { touchUI } from "./device.ts";
 import { BoardModel } from "../core/board-model.ts";
 import { BLOCK, BoardView, CELL } from "./board-view.ts";
 import { fitText, text, wrapText } from "./draw.ts";
@@ -97,7 +98,9 @@ export class Howto {
     const pic = { x, y: y + 62, w: 194, h: 120 };
     if (kind === 1) drawGrades(g, pic);
     else drawCombo(g, pic);
-    wrapText(g, t(`HOWTO_C${n}_B` as TextKey), x + 224, y + 80, w - 224, 27, 35, "#d0cddd");
+    // 2번 단락(미리 보기)은 기기에 맞는 조작으로 설명한다
+    const body = (n === 2 && !touchUI() ? "HOWTO_C2_B_PC" : `HOWTO_C${n}_B`) as TextKey;
+    wrapText(g, t(body), x + 224, y + 80, w - 224, 27, 35, "#d0cddd");
   }
 
   private drawSpread(g: CanvasRenderingContext2D, x: number, y: number, w: number): void {

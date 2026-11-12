@@ -1,5 +1,6 @@
 import { roundRect } from "./board-view.ts";
 import { accentLine, ellipsisText, fitText, menuBackdrop, text, wrapText } from "./draw.ts";
+import { touchUI } from "./device.ts";
 import { Howto } from "./howto.ts";
 import { getLang, GRADE_KEYS, setLang, t, type TextKey } from "./i18n.ts";
 import { StampMenu, type StampFootprint } from "./stamp-menu.ts";
@@ -15,6 +16,12 @@ import type { LeaderRow, MyRow } from "./online.ts";
 const W = 720;
 const BTN_W = 552;
 const BTN_X = (W - BTN_W) / 2;
+
+/** 들어오는 연출 0→1 (delay초 뒤 0.32초, 끝에서 감속) */
+function enter(t: number, delay: number): number {
+  const k = Math.min(1, Math.max(0, (t - delay) / 0.32));
+  return 1 - (1 - k) ** 3;
+}
 
 export type PanelId = "title" | "howto" | "settings" | "pause" | "result" | "ranking";
 
@@ -88,6 +95,7 @@ interface Button {
   small?: boolean;
   profile?: boolean;
   tab?: () => boolean;
+  icon?: "gear" | "help";
   onPress: () => void;
 }
 
@@ -136,6 +144,9 @@ export class Menus {
   readonly settings: Settings;
   private panels: Record<PanelId, Panel>;
   private fade = 0;
+  /** 화면을 연 뒤 지난 시간(항목이 하나씩 올라오는 연출) */
+  private openT = 0;
+  private slammed = false;
   private focus = -1;
   private hover = -1;
   private drag: Slider | null = null;
@@ -161,14 +172,14 @@ export class Menus {
       title: {
         dim: 0,
         widgets: [
-          btn(596, "START", () => this.actions.start(), true),
-          btn(708, "RANKING", () => this.openRanking()),
-          btn(802, "HOW_TO_PLAY", () => this.open("howto")),
-          btn(896, "TUTORIAL_BTN", () => this.actions.tutorial()),
-          btn(990, "SETTINGS", () => this.openSettings("title")),
+          // 큰 단추는 시작·랭킹 둘만. 게임 방법(튜토리얼 포함)과 설정은 위 구석의 작은 그림 단추로
+          { ...btn(576, "START", () => this.actions.start(), true), width: 360 },
+          { ...btn(698, "RANKING", () => this.openRanking()), width: 360 },
+          { kind: "button", y: 30, x: 76, label: () => t("HOW_TO_PLAY"), icon: "help", onPress: () => this.open("howto") },
+          { kind: "button", y: 30, x: 644, label: () => t("SETTINGS"), icon: "gear", onPress: () => this.openSettings("title") },
           {
             // 로그인했으면 메뉴 아래에 내 닉네임과 '닉네임 변경'
-            kind: "button", y: 1154, profile: true, width: 552,
+            kind: "button", y: 956, profile: true, width: 440,
             label: () => t("RANK_EDIT_NAME"), value: () => this.rank.nickname || t("RANK_NICK_UNSET"),
             onPress: () => this.actions.rankNickname(),
             hidden: () => this.rank.status === "off" || this.rank.nickname === null,
@@ -178,7 +189,11 @@ export class Menus {
       },
       howto: {
         dim: 0.94,
-        widgets: [btn(1168, "BACK", () => this.open("title"), true)],
+        widgets: [
+          // 튜토리얼은 타이틀에서 빠지고 여기로: 읽고 나서 바로 연습해 볼 수 있게
+          { kind: "button", y: 1150, x: 214, width: 260, label: () => t("TUTORIAL_BTN"), onPress: () => this.actions.tutorial() },
+          { kind: "button", y: 1150, x: 498, width: 300, label: () => t("BACK"), primary: true, onPress: () => this.open("title") },
+        ],
         draw: (g) => {
           this.look.heading(g, t("HOW_TO_PLAY"));
           text(g, t("HOWTO_SUB"), W / 2, 196, 28, SKIN.muted, "center");
@@ -186,7 +201,8 @@ export class Menus {
           this.howto.drawSection(g, 0, 60, 236, 600);
           this.howto.drawSection(g, 1, 60, 648, 600);
           this.howto.drawSection(g, 2, 60, 870, 600);
-          fitText(g, t("HOWTO_KEYS"), W / 2, 1098, 25, 624, SKIN.muted, "center");
+          // 키보드 안내는 PC에서만(휴대폰에는 키보드가 없다)
+          if (!touchUI()) fitText(g, t("HOWTO_KEYS"), W / 2, 1098, 25, 624, SKIN.muted, "center");
         },
       },
       settings: {
@@ -278,6 +294,8 @@ export class Menus {
     if (id === "howto") this.howto.reset();
     if (id === "result") this.playResult();
     this.fade = 0;
+    this.openT = 0;
+    this.slammed = false;
     this.focus = -1;
     this.hover = -1;
     this.drag = null;
@@ -435,6 +453,11 @@ export class Menus {
     this.look.update(dt);
     if (this.current === "howto") this.howto.update(dt);
     this.fade = Math.min(1, this.fade + dt / 0.18);
+    this.openT += dt;
+    if (!this.slammed && this.current && this.current !== "result" && this.openT > 0.05 + this.widgets.length * 0.06) {
+      this.slammed = true;
+      this.look.slam();
+    }
     this.updateSelection(dt);
   }
 
@@ -444,47 +467,72 @@ export class Menus {
     g.save();
     if (p.dim > 0) menuBackdrop(g);
     g.globalAlpha = this.fade;
+    // 화면 내용은 살짝 아래에서 떠오르고, 항목은 위에서부터 하나씩 차례로 올라온다(결과 화면은 자체 연출)
+    const rise = this.current === "result" ? 1 : enter(this.openT, 0);
+    g.save();
+    g.translate(0, 22 * (1 - rise));
     p.draw(g);
+    g.restore();
     const btnA = this.current === "result" ? (this.anim?.buttons ?? 1) : 1;
     g.save();
     g.globalAlpha *= btnA;
     if (btnA < 1) g.translate(0, 24 * (1 - btnA));
-    this.look.drawSelection(g);
-    this.widgets.forEach((w, i) => {
-      if (w.kind === "button") this.look.button(g, w, i, i === this.selected);
+    const order = this.widgets.map((w) => w.y).sort((a, b) => a - b);
+    const each = (w: Widget, draw: () => void) => {
+      const k = this.current === "result" ? 1 : enter(this.openT, 0.05 + order.indexOf(w.y) * 0.06);
+      g.save();
+      g.globalAlpha *= k;
+      g.translate(0, 30 * (1 - k));
+      draw();
+      g.restore();
+    };
+    // 고른 항목의 도장은 항목들이 다 올라온 뒤에 찍힌다
+    if (this.current === "result" || this.slammed) this.look.drawSelection(g);
+    this.widgets.forEach((w, i) => each(w, () => {
+      if (w.kind === "button") this.look.button(g, w, i, i === this.selected, this.current === "title");
       else this.look.slider(g, w.label(), w.y, w.get(), i, i === this.selected);
-    });
+    }));
     g.restore();
     g.restore();
   }
 
   /**
-   * 첫 접속 대기 화면: 타이틀 글자는 그대로 두고 메뉴 자리에 깜박이는 안내를 띄운다.
+   * 첫 접속 대기 화면: 타이틀과 같은 구도에 은은하게 숨 쉬는 안내를 띄운다.
    * 브라우저는 사용자가 한 번 눌러야 소리를 허용하므로, 이 한 번으로 음악을 연다.
    */
   drawTapToStart(g: CanvasRenderingContext2D, time: number): void {
     this.drawTitle(g);
-    const pulse = 0.5 + 0.5 * Math.sin(time * 3.4);
+    // Match the START landing point so waking the menu preserves the composition.
+    const start = this.panels.title.widgets[0];
+    const y = this.footprint(start).y;
+    const pulse = 0.5 - 0.5 * Math.cos(time * Math.PI * 2 / 3.6);
     g.save();
-    g.globalAlpha = 0.78 + 0.22 * pulse;
-    this.look.lettering(g, t("TAP_TO_START"), W / 2, 800, 46, 600, SKIN.accent);
+    g.translate(W / 2, y);
+    g.rotate(-0.055);
+    g.globalAlpha = 0.88 + 0.12 * pulse;
+    this.look.lettering(g, t("TAP_TO_START"), 0, 14, 38, 540, SKIN.accent);
+    accentLine(g, -160, 40, 320);
+    // Three little ink impressions echo the game's blocks without adding copy.
+    for (let i = 0; i < 3; i++) {
+      g.fillStyle = alpha(i === 1 ? SKIN.accent : SKIN.score, i === 1 ? 0.7 + pulse * 0.2 : 0.35);
+      g.fillRect(-27 + i * 24, 116, 7, 7);
+    }
     g.restore();
-    accentLine(g, 260, 828, 200);
-    this.look.lettering(g, t("TAP_SOUND_HINT"), W / 2, 888, 28, 600, SKIN.muted, "center", false);
   }
 
   private drawTitle(g: CanvasRenderingContext2D): void {
-    this.look.lettering(g, t("ARCADE_TAG"), W / 2, 100, 27, 600, SKIN.accent);
-    text(g, t("SUBTITLE"), W / 2, 494, 30, SKIN.text, "center");
-    this.look.lettering(g, t("TITLE_META"), W / 2, 544, 26, 600, SKIN.score);
-    const shade = g.createLinearGradient(0, 1050, 0, 1280);
-    shade.addColorStop(0, "rgba(9,7,21,0)");
-    shade.addColorStop(0.3, "rgba(9,7,21,0.8)");
-    shade.addColorStop(1, "rgba(9,7,21,0.94)");
-    g.fillStyle = shade; g.fillRect(0, 1050, W, 230);
+    this.look.lettering(g, t("ARCADE_TAG"), W / 2, 100, 24, 440, "#94c6d7", "center", false);
+    // A quiet, open record area sits above the horizon, clear of the moving grid.
     if (this.best > 0) {
-      accentLine(g, 160, 1078, 400, SKIN.timeText);
-      this.look.lettering(g, t("BEST_FMT", this.best.toLocaleString()), W / 2, 1132, 36, 600, SKIN.timeText);
+      g.save();
+      accentLine(g, 220, 874, 116, SKIN.timeText);
+      accentLine(g, 384, 874, 116, SKIN.timeText);
+      g.translate(W / 2, 875);
+      g.rotate(-Math.PI / 4);
+      g.fillStyle = alpha(SKIN.timeText, 0.7);
+      g.fillRect(-4, -4, 8, 8);
+      g.restore();
+      this.look.lettering(g, t("BEST_FMT", this.best.toLocaleString()), W / 2, 934, 34, 500, "#edcd7b", "center", false);
     }
   }
 
