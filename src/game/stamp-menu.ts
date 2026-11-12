@@ -1,4 +1,5 @@
 import { roundRect } from "./board-view.ts";
+import { accentLine, ellipsisText } from "./draw.ts";
 import { t } from "./i18n.ts";
 import { alpha, font, SKIN } from "./skin.ts";
 
@@ -12,6 +13,8 @@ interface Action {
   width?: number;
   /** 작은 글씨 항목(타이틀 아래 닉네임 줄) */
   small?: boolean;
+  /** Account name and edit affordance share a single touch target. */
+  profile?: boolean;
   /** 탭이면: 지금 보고 있는 탭인지 */
   tab?: () => boolean;
 }
@@ -57,7 +60,7 @@ export class StampMenu {
     return {
       x: b.x ?? 360, y: b.y + 46,
       width: b.width ?? (b.value ? ROW_WIDTH : Math.min(540, Math.max(b.small ? 240 : 300,
-        this.width(b.label(), b.primary ? PRIMARY_SIZE : b.small ? 26 : 35, b.primary ? 900 : 700) + 100))),
+        this.width(b.label(), b.primary ? PRIMARY_SIZE : b.small ? 29 : 36, b.primary ? 900 : 700) + 100))),
     };
   }
 
@@ -155,6 +158,7 @@ export class StampMenu {
   }
 
   heading(g: CanvasRenderingContext2D, label: string, y = 140): void {
+    accentLine(g, 320, y - 82, 80);
     this.lettering(g, label, 360, y, 62, 590, SKIN.text);
   }
 
@@ -198,9 +202,12 @@ export class StampMenu {
     g.save(); this.transform(g, f);
     if (b.primary) {
       this.primary(g, b.label(), f.width);
+    } else if (b.profile && b.value) {
+      ellipsisText(g, b.value(), 0, -3, 32, f.width - 60, SKIN.accent, "center");
+      this.lettering(g, b.label(), 0, 30, 26, f.width - 60, active ? SKIN.accent : SKIN.muted, "center", false);
     } else if (b.value) {
-      this.lettering(g, b.label(), -276, 11, 30, 342, active ? SKIN.accent : SKIN.muted, "left", active);
-      this.lettering(g, b.value(), 276, 11, 32, 160, active ? SKIN.accent : this.color(i), "right", active);
+      this.lettering(g, b.label(), -276, 11, 33, 342, active ? SKIN.accent : SKIN.text, "left", active);
+      this.lettering(g, b.value(), 276, 11, 35, 160, active ? SKIN.accent : this.color(i), "right", active);
     } else if (b.tab) {
       // 탭: 보고 있는 탭은 하늘색 글자 + 빛나는 굵은 밑줄, 아닌 탭은 흐린 글자
       const on = b.tab(), size = 38 * Math.min(1, (f.width - 40) / Math.max(1, this.width(b.label(), 38, 900)));
@@ -213,10 +220,10 @@ export class StampMenu {
         g.restore();
       }
     } else {
-      const base = b.small ? 26 : 35;
-      const size = base * Math.min(1, (f.width - 100) / Math.max(1, this.width(b.label(), base, 700)));
+      const base = b.small ? 29 : 36;
+      const size = base * Math.min(1, (f.width - (b.small ? 40 : 80)) / Math.max(1, this.width(b.label(), base, 700)));
       g.font = font(size, 700); g.textAlign = "center"; g.textBaseline = "alphabetic";
-      g.fillStyle = active ? SKIN.accent : SKIN.text;
+      g.fillStyle = active ? SKIN.accent : b.small ? SKIN.muted : SKIN.text;
       g.fillText(b.label(), 0, 13);
     }
     g.restore();
@@ -225,8 +232,8 @@ export class StampMenu {
   slider(g: CanvasRenderingContext2D, label: string, y: number, value: number, i: number, active: boolean): void {
     const col = this.color(i);
     g.save(); this.transform(g, this.sliderFootprint(y));
-    this.lettering(g, label, -276, -6, 30, 360, active ? SKIN.accent : SKIN.text, "left", active);
-    this.lettering(g, t("PERCENT_FMT", Math.round(value * 100)), 276, -6, 30, 130, active ? SKIN.accent : col, "right");
+    this.lettering(g, label, -276, -10, 33, 360, active ? SKIN.accent : SKIN.text, "left", active);
+    this.lettering(g, t("PERCENT_FMT", Math.round(value * 100)), 276, -10, 36, 130, active ? SKIN.accent : col, "right");
     this.meter(g, -TRACK_WIDTH / 2, TRACK_Y, TRACK_WIDTH, value, col);
     const x = -TRACK_WIDTH / 2 + TRACK_WIDTH * value;
     g.save(); g.translate(x, TRACK_Y);

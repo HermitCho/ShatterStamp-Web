@@ -1,9 +1,9 @@
 import { roundRect } from "./board-view.ts";
-import { fitText, menuBackdrop, text } from "./draw.ts";
+import { accentLine, ellipsisText, fitText, menuBackdrop, text, wrapText } from "./draw.ts";
 import { Howto } from "./howto.ts";
 import { getLang, GRADE_KEYS, setLang, t, type TextKey } from "./i18n.ts";
 import { StampMenu, type StampFootprint } from "./stamp-menu.ts";
-import { SKIN } from "./skin.ts";
+import { alpha, font, SKIN } from "./skin.ts";
 import { ease, Tweens } from "./tween.ts";
 import type { LeaderRow, MyRow } from "./online.ts";
 
@@ -86,6 +86,7 @@ interface Button {
   x?: number;
   width?: number;
   small?: boolean;
+  profile?: boolean;
   tab?: () => boolean;
   onPress: () => void;
 }
@@ -167,8 +168,8 @@ export class Menus {
           btn(990, "SETTINGS", () => this.openSettings("title")),
           {
             // 로그인했으면 메뉴 아래에 내 닉네임과 '닉네임 변경'
-            kind: "button", y: 1134, small: true,
-            label: () => this.rank.nickname ? t("TITLE_NICK_FMT", this.rank.nickname) : t("NICK_TITLE"),
+            kind: "button", y: 1154, profile: true, width: 552,
+            label: () => t("RANK_EDIT_NAME"), value: () => this.rank.nickname || t("RANK_NICK_UNSET"),
             onPress: () => this.actions.rankNickname(),
             hidden: () => this.rank.status === "off" || this.rank.nickname === null,
           },
@@ -179,40 +180,42 @@ export class Menus {
         dim: 0.94,
         widgets: [btn(1168, "BACK", () => this.open("title"), true)],
         draw: (g) => {
-          heading(g, t("HOW_TO_PLAY"));
+          this.look.heading(g, t("HOW_TO_PLAY"));
           text(g, t("HOWTO_SUB"), W / 2, 196, 28, SKIN.muted, "center");
           this.howto.drawSection(g, 0, 60, 244, 600);
-          this.howto.drawSection(g, 1, 60, 676, 600);
-          this.howto.drawSection(g, 2, 60, 896, 600);
-          fitText(g, t("HOWTO_KEYS"), W / 2, 1120, 23, 624, SKIN.muted, "center");
+          this.howto.drawSection(g, 1, 60, 686, 600);
+          this.howto.drawSection(g, 2, 60, 924, 600);
+          fitText(g, t("HOWTO_KEYS"), W / 2, 1146, 25, 624, SKIN.muted, "center");
         },
       },
       settings: {
         dim: 0.94,
         widgets: [
-          { kind: "slider", y: 400, label: () => t("SOUND"), get: () => this.settings.sfx, set: (v) => { this.settings.sfx = v; changed(); } },
-          { kind: "slider", y: 560, label: () => t("MUSIC"), get: () => this.settings.music, set: (v) => { this.settings.music = v; changed(); } },
+          { kind: "slider", y: 396, label: () => t("SOUND"), get: () => this.settings.sfx, set: (v) => { this.settings.sfx = v; changed(); } },
+          { kind: "slider", y: 548, label: () => t("MUSIC"), get: () => this.settings.music, set: (v) => { this.settings.music = v; changed(); } },
           { kind: "button", y: 714, label: () => t("SHAKE"), value: () => t(this.settings.shake ? "ON" : "OFF"), onPress: () => { this.settings.shake = !this.settings.shake; changed(); } },
-          { kind: "button", y: 826, label: () => t("LANGUAGE"), value: () => t("LANG_NAME"), onPress: () => setLang(getLang() === "ko" ? "en" : "ko") },
-          btn(1070, "BACK", () => this.open(this.settingsBack), true),
+          { kind: "button", y: 854, label: () => t("LANGUAGE"), value: () => t("LANG_NAME"), onPress: () => setLang(getLang() === "ko" ? "en" : "ko") },
+          btn(1096, "BACK", () => this.open(this.settingsBack), true),
         ],
         draw: (g) => {
           this.look.heading(g, t("SETTINGS"));
           text(g, t("SETTINGS_SUB"), W / 2, 208, 28, SKIN.muted, "center");
-          this.look.lettering(g, t("AUDIO"), BTN_X, 276, 25, BTN_W, SKIN.accent, "left");
-          this.look.lettering(g, t("PREFERENCES"), BTN_X, 676, 25, BTN_W, SKIN.score, "left");
+          this.look.lettering(g, t("AUDIO"), BTN_X, 298, 28, BTN_W, SKIN.accent, "left", false);
+          accentLine(g, BTN_X, 628, BTN_W, SKIN.muted);
+          this.look.lettering(g, t("PREFERENCES"), BTN_X, 682, 28, BTN_W, SKIN.score, "left", false);
+          accentLine(g, BTN_X, 994, BTN_W, SKIN.muted);
         },
       },
       pause: {
         dim: 0.97, // 멈춘 채로 다음 자리를 계산하지 못하게 보드를 거의 가린다
         widgets: [
-          btn(508, "RESUME", () => this.actions.resume(), true),
-          btn(620, "RESTART", () => this.actions.restart()),
-          btn(732, "SETTINGS", () => this.openSettings("pause")),
-          btn(844, "TITLE", () => this.actions.toTitle()),
+          btn(560, "RESUME", () => this.actions.resume(), true),
+          btn(682, "RESTART", () => this.actions.restart()),
+          btn(794, "SETTINGS", () => this.openSettings("pause")),
+          btn(906, "TITLE", () => this.actions.toTitle()),
         ],
         draw: (g) => {
-          g.save(); g.translate(360, 228); g.rotate(-0.055);
+          g.save(); g.translate(360, 258); g.rotate(-0.055);
           g.fillStyle = SKIN.score;
           g.shadowColor = SKIN.score; g.shadowBlur = 18;
           for (const x of [-23, 9]) {
@@ -220,41 +223,44 @@ export class Menus {
             g.fill();
           }
           g.restore();
-          this.look.heading(g, t("PAUSED"), 378);
-          text(g, t("PAUSE_SUB"), W / 2, 450, 27, SKIN.muted, "center");
-          text(g, t("PAUSE_META"), W / 2, 1030, 27, SKIN.muted, "center");
+          this.look.heading(g, t("PAUSED"), 408);
+          fitText(g, t("PAUSE_SUB"), W / 2, 480, 30, 600, SKIN.muted, "center");
+          accentLine(g, 200, 1056, 320, SKIN.score);
+          fitText(g, t("PAUSE_META"), W / 2, 1110, 28, 600, SKIN.muted, "center");
         },
       },
       ranking: {
         dim: 0.94,
         widgets: [
           {
-            kind: "button", y: 176, x: 222, width: 276, label: () => t("RANK_TAB_ALL"),
+            kind: "button", y: 176, x: 232, width: 256, label: () => t("RANK_TAB_ALL"),
             tab: () => this.rank.mode === "all", onPress: () => this.rankTab("all"),
           },
           {
-            kind: "button", y: 176, x: 498, width: 276, label: () => t("RANK_TAB_MINE"),
+            kind: "button", y: 176, x: 488, width: 256, label: () => t("RANK_TAB_MINE"),
             tab: () => this.rank.mode === "mine", onPress: () => this.rankTab("mine"),
           },
           {
-            kind: "button", y: 960, label: () => t("RANK_LOGIN"), onPress: () => this.actions.rankLogin(),
+            kind: "button", y: 1000, width: 464, label: () => t("RANK_LOGIN"), onPress: () => this.actions.rankLogin(),
             hidden: () => this.rank.status === "off" || this.rank.nickname !== null,
           },
           {
-            kind: "button", y: 920, label: () => t("RANK_NICK"), value: () => this.rank.nickname || t("RANK_NICK_UNSET"),
+            kind: "button", y: 972, x: 260, width: 304, profile: true,
+            label: () => t("RANK_EDIT_NAME"), value: () => this.rank.nickname || t("RANK_NICK_UNSET"),
             onPress: () => this.actions.rankNickname(), hidden: () => this.rank.nickname === null,
           },
           {
-            kind: "button", y: 1010, label: () => t("RANK_LOGOUT"), onPress: () => this.actions.rankLogout(),
+            kind: "button", y: 972, x: 538, width: 156, small: true,
+            label: () => t("RANK_LOGOUT"), onPress: () => this.actions.rankLogout(),
             hidden: () => this.rank.nickname === null,
           },
-          btn(1130, "BACK", () => this.open("title"), true),
+          btn(1132, "BACK", () => this.open("title"), true),
         ],
         draw: (g) => this.drawRanking(g),
       },
       result: {
         dim: 0.86,
-        widgets: [btn(1030, "RETRY", () => this.actions.restart(), true), btn(1140, "TITLE", () => this.actions.toTitle())],
+        widgets: [btn(1052, "RETRY", () => this.actions.restart(), true), btn(1160, "TITLE", () => this.actions.toTitle())],
         draw: (g) => this.drawResult(g),
       },
     };
@@ -459,17 +465,26 @@ export class Menus {
     this.drawTitle(g);
     const pulse = 0.5 + 0.5 * Math.sin(time * 3.4);
     g.save();
-    g.globalAlpha = 0.45 + 0.55 * pulse;
-    this.look.lettering(g, t("TAP_TO_START"), W / 2, 800, 44, 600, SKIN.accent);
+    g.globalAlpha = 0.78 + 0.22 * pulse;
+    this.look.lettering(g, t("TAP_TO_START"), W / 2, 800, 46, 600, SKIN.accent);
     g.restore();
-    this.look.lettering(g, t("TAP_SOUND_HINT"), W / 2, 862, 23, 600, SKIN.muted, "center", false);
+    accentLine(g, 260, 828, 200);
+    this.look.lettering(g, t("TAP_SOUND_HINT"), W / 2, 888, 28, 600, SKIN.muted, "center", false);
   }
 
   private drawTitle(g: CanvasRenderingContext2D): void {
-    this.look.lettering(g, t("ARCADE_TAG"), W / 2, 100, 25, 600, SKIN.accent);
+    this.look.lettering(g, t("ARCADE_TAG"), W / 2, 100, 27, 600, SKIN.accent);
     text(g, t("SUBTITLE"), W / 2, 494, 30, SKIN.text, "center");
-    this.look.lettering(g, t("TITLE_META"), W / 2, 544, 23, 600, SKIN.score);
-    if (this.best > 0) this.look.lettering(g, t("BEST_FMT", this.best.toLocaleString()), W / 2, 1110, 30, 600, SKIN.timeText);
+    this.look.lettering(g, t("TITLE_META"), W / 2, 544, 26, 600, SKIN.score);
+    const shade = g.createLinearGradient(0, 1050, 0, 1280);
+    shade.addColorStop(0, "rgba(9,7,21,0)");
+    shade.addColorStop(0.3, "rgba(9,7,21,0.8)");
+    shade.addColorStop(1, "rgba(9,7,21,0.94)");
+    g.fillStyle = shade; g.fillRect(0, 1050, W, 230);
+    if (this.best > 0) {
+      accentLine(g, 160, 1078, 400, SKIN.timeText);
+      this.look.lettering(g, t("BEST_FMT", this.best.toLocaleString()), W / 2, 1132, 36, 600, SKIN.timeText);
+    }
   }
 
   // ---------------------------------------------------------------- 결과 연출
@@ -543,9 +558,43 @@ export class Menus {
   private drawRanking(g: CanvasRenderingContext2D): void {
     const rv = this.rank, look = this.look;
     look.heading(g, t("RANKING"), 112);
-    text(g, t(rv.mode === "all" ? "RANK_SUB" : "RANK_SUB_MINE"), W / 2, 330, 24, SKIN.muted, "center");
-    const top = 384, step = 50;
-    const message = (key: TextKey) => look.lettering(g, t(key), W / 2, 620, 28, 560, SKIN.muted, "center", false);
+    text(g, t(rv.mode === "all" ? "RANK_SUB" : "RANK_SUB_MINE"), W / 2, 306, 24, SKIN.muted, "center");
+    const left = 104, right = 616, top = 400, step = 48;
+    // Ranking uses the font's native weight and equal-width digits, without the
+    // synthetic heavy lettering used by menu stamps. Numeric columns share an edge.
+    const ink = (s: string, x: number, y: number, size: number, width: number, color: string,
+      align: CanvasTextAlign = "right", lit = false) => {
+      g.save();
+      g.font = font(size);
+      const measured = g.measureText(s).width;
+      g.font = font(size * Math.min(1, width / Math.max(1, measured)));
+      g.textAlign = align; g.textBaseline = "alphabetic";
+      g.fillStyle = color;
+      if (lit) { g.shadowColor = alpha(color, 0.55); g.shadowBlur = 9; }
+      g.fillText(s, x, y);
+      g.restore();
+    };
+    const message = (key: TextKey) => {
+      accentLine(g, 260, 526, 200);
+      wrapText(g, t(key), 360, 596, right - left, 28, 44, SKIN.muted, "center");
+    };
+    const hasRows = rv.status === "ready" && (rv.mode === "all" ? rv.all.length > 0 : rv.nickname !== null && rv.mine.length > 0);
+    if (hasRows) {
+      ink(t("RANK_PLACE"), 118, 354, 21, 52, SKIN.muted, "center");
+      ink(t(rv.mode === "all" ? "RANK_PLAYER" : "RANK_DATE"), 166, 354, 22, 200, SKIN.muted, "left");
+      ink(t("RANK_COMBO"), 442, 354, 22, 82, SKIN.muted);
+      ink(t("SCORE"), right, 354, 22, 152, SKIN.muted);
+      accentLine(g, left, 368, right - left, SKIN.muted);
+    }
+    const rowAccent = (y: number, own: boolean) => {
+      if (own) {
+        const glow = g.createLinearGradient(left - 12, y, right + 8, y);
+        glow.addColorStop(0, alpha(SKIN.accent, 0.13));
+        glow.addColorStop(1, alpha(SKIN.accent, 0));
+        g.fillStyle = glow; g.fillRect(left - 12, y - 30, right - left + 20, 42);
+        g.fillStyle = SKIN.accent; g.fillRect(left - 12, y - 24, 3, 27);
+      }
+    };
     if (rv.status === "off") message("RANK_OFF");
     else if (rv.status === "loading") message("RANK_LOADING");
     else if (rv.status === "error") message("RANK_ERROR");
@@ -553,27 +602,34 @@ export class Menus {
       if (!rv.all.length) message("RANK_EMPTY");
       rv.all.forEach((r, i) => {
         const y = top + i * step, col = r.mine ? SKIN.accent : i < 3 ? SKIN.timeText : SKIN.text;
-        look.lettering(g, String(r.rank), 112, y, i < 3 ? 34 : 28, 60, i < 3 ? SKIN.timeText : SKIN.muted, "center", i < 3);
-        fitText(g, r.nickname, 160, y, 28, 250, col, "left");
-        fitText(g, t("RANK_ROW_COMBO", r.maxCombo), 452, y, 19, 100, SKIN.muted, "right");
-        look.lettering(g, r.score.toLocaleString(), 636, y, 30, 170, r.mine ? SKIN.accent : SKIN.score, "right", r.mine || i < 3);
+        rowAccent(y, r.mine);
+        ink(String(r.rank), 118, y, 24, 48, i < 3 ? SKIN.timeText : SKIN.muted, "center", i < 3);
+        ellipsisText(g, r.nickname, 166, y, 26, 200, col);
+        ink(String(r.maxCombo), 442, y, 23, 66, r.mine ? SKIN.accent : SKIN.muted);
+        ink(r.score.toLocaleString(), right, y, 28, 152, r.mine ? SKIN.accent : SKIN.score, "right", r.mine || i < 3);
       });
     } else {
-      if (rv.nickname === null) message("RANK_GUEST");
+      if (rv.nickname === null) message("RANK_GUEST_RECORDS");
       else if (!rv.mine.length) message("RANK_NO_SCORE");
       rv.mine.forEach((r, i) => {
         const y = top + i * step;
-        look.lettering(g, String(i + 1), 112, y, i === 0 ? 34 : 28, 60, i === 0 ? SKIN.timeText : SKIN.muted, "center", i === 0);
-        fitText(g, `${r.at.getMonth() + 1}/${r.at.getDate()}`, 160, y, 24, 110, SKIN.muted, "left");
-        fitText(g, t("RANK_ROW_COMBO", r.maxCombo), 452, y, 19, 120, SKIN.muted, "right");
-        look.lettering(g, r.score.toLocaleString(), 636, y, 30, 200, i === 0 ? SKIN.accent : SKIN.score, "right", i === 0);
+        rowAccent(y, i === 0);
+        ink(String(i + 1), 118, y, 24, 48, i === 0 ? SKIN.timeText : SKIN.muted, "center", i === 0);
+        ink(`${r.at.getMonth() + 1}/${r.at.getDate()}`, 166, y, 25, 200, SKIN.text, "left");
+        ink(String(r.maxCombo), 442, y, 23, 66, SKIN.muted);
+        ink(r.score.toLocaleString(), right, y, 28, 152, i === 0 ? SKIN.accent : SKIN.score, "right", i === 0);
       });
     }
     // 아래: 내 순위 또는 로그인 안내
     if (rv.status !== "off") {
-      const line = rv.nickname === null ? t("RANK_GUEST")
-        : rv.myRank ? t("RANK_MY_FMT", rv.myRank.rank, rv.myRank.best.toLocaleString()) : t("RANK_NO_SCORE");
-      look.lettering(g, line, W / 2, 900, 24, 600, rv.myRank ? SKIN.timeText : SKIN.muted, "center", !!rv.myRank);
+      accentLine(g, 244, 880, 232, rv.myRank ? SKIN.timeText : SKIN.accent);
+      if (rv.nickname !== null && rv.myRank) {
+        ink(t("RANK_MY_PLACE"), left, 926, 23, 120, SKIN.muted, "left");
+        ink(t("RANK_PLACE_FMT", rv.myRank.rank), 310, 926, 30, 80, SKIN.timeText, "right", true);
+        ink(t("BEST_FMT", rv.myRank.best.toLocaleString()), right, 926, 25, 268, SKIN.timeText);
+      } else {
+        wrapText(g, t(rv.nickname === null ? "RANK_GUEST" : "RANK_NO_SCORE"), 360, 926, right - left, 24, 34, SKIN.muted, "center");
+      }
     }
   }
 
@@ -583,49 +639,47 @@ export class Menus {
     g.save(); g.globalAlpha *= an.title;
     look.heading(g, t("TIME_UP"), 166);
     g.restore();
-    text(g, t("RESULT_TAG"), 360, 239, 25, SKIN.muted, "center");
-    look.lettering(g, t("SCORE"), 360, 294, 25, 560, SKIN.score);
+    text(g, t("RESULT_TAG"), 360, 239, 28, SKIN.muted, "center");
+    look.lettering(g, t("SCORE"), 360, 294, 28, 560, SKIN.score);
     g.save(); g.globalAlpha *= an.scoreA;
     const pulse = 1 + (an.scoreScale - 1) * 0.2;
     g.translate(360, 367); g.scale(pulse, pulse); g.translate(-360, -367);
     look.score(g, an.score.toLocaleString(), SKIN.score);
     g.restore();
     g.save(); g.globalAlpha *= an.best;
-    look.lettering(g, r.newBest ? t("NEW_BEST") : t("BEST_FMT", r.best.toLocaleString()), 360, 492, 28, 560, SKIN.timeText);
-    if (this.resultRank) look.lettering(g, this.resultRank, 360, 536, 22, 560, SKIN.accent, "center", false);
+    look.lettering(g, r.newBest ? t("NEW_BEST") : t("BEST_FMT", r.best.toLocaleString()), 360, 484, 36, 600, SKIN.timeText);
+    if (this.resultRank) {
+      // Long service messages wrap at a readable size instead of shrinking.
+      wrapText(g, this.resultRank, 360, 542, 600, 30, 38, SKIN.accent, "center");
+    }
     g.restore();
-    const statX = [176, 0, 360, 544];
+    const statX = [160, 0, 360, 560];
     an.rows.forEach((row, i) => {
       if (row.a <= 0) return;
       g.save(); g.globalAlpha *= row.a; g.translate(0, row.dx * 0.2);
       if (i === 1) {
-        look.lettering(g, t("RESULT_GRADES"), 84, 770, 24, 552, SKIN.muted, "left", false);
+        look.lettering(g, t("RESULT_GRADES"), 64, 782, 28, 592, SKIN.muted, "left", false);
+        accentLine(g, 64, 801, 592, SKIN.muted);
         const max = Math.max(1, ...r.grades);
         for (let k = 0; k < 4; k++) {
-          const x = 84 + k % 2 * 306, y = 830 + Math.floor(k / 2) * 92;
-          look.lettering(g, t(GRADE_KEYS[k]), x, y, 25, 166, SKIN.grades[k], "left");
-          look.lettering(g, String(row.values[k]), x + 246, y, 34, 80, SKIN.text, "right");
-          look.meter(g, x, y + 22, 246, row.values[k] / max, SKIN.grades[k]);
+          const x = 64 + k % 2 * 324, y = 846 + Math.floor(k / 2) * 98;
+          look.lettering(g, t(GRADE_KEYS[k]), x, y, 28, 162, SKIN.grades[k], "left", false);
+          look.lettering(g, String(row.values[k]), x + 268, y, 39, 100, SKIN.text, "right");
+          look.meter(g, x, y + 25, 268, row.values[k] / max, SKIN.grades[k]);
         }
       } else {
         const x = statX[i], value = row.values[0];
         const name = i === 0 ? "R_MAX_COMBO" : i === 2 ? "R_TIME" : "R_BIGGEST";
         const val = i === 2 ? t("SEC_FMT", value) : i === 3 ? t("COUNT_FMT", value) : String(value);
         const col = i === 0 ? SKIN.score : i === 2 ? SKIN.accent : SKIN.timeText;
-        fitText(g, t(name), x, 586, 22, 166, SKIN.muted, "center");
+        fitText(g, t(name), x, 634, 27, 180, SKIN.muted, "center");
         g.save();
-        g.translate(x, 640); g.rotate(-0.055); g.translate(-x, -640);
-        look.lettering(g, val, x, 654, 44, 160, col);
+        g.translate(x, 690); g.rotate(-0.055); g.translate(-x, -690);
+        look.lettering(g, val, x, 700, 46, 170, col);
         g.restore();
-        look.meter(g, x - 46, 687, 92, 1, col);
+        accentLine(g, x - 56, 726, 112, col);
       }
       g.restore();
     });
   }
-}
-
-function heading(g: CanvasRenderingContext2D, s: string, y = 140): void {
-  roundRect(g, W / 2 - 28, y - 86, 56, 5, 2.5);
-  g.fillStyle = SKIN.accent; g.fill();
-  fitText(g, s, W / 2, y, 60, 620, SKIN.text, "center");
 }

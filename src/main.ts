@@ -49,6 +49,8 @@ window.addEventListener("keydown", (e) => {
   // 닉네임 입력칸에 글자를 칠 때는 게임 조작으로 받지 않는다
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === "Space") e.preventDefault();
+  // Ranking owns Tab navigation; do not also move focus onto the legal links.
+  if (e.code === "Tab" && game.menus.current === "ranking") e.preventDefault();
   game.key(e.code);
 });
 

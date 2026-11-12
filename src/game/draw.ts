@@ -38,8 +38,31 @@ export function fitText(g: CanvasRenderingContext2D, s: string, x: number, y: nu
   text(g, s, x, y, measured > width ? size * width / measured : size, color, align);
 }
 
+/** User names keep a readable size even when all twelve characters are wide. */
+export function ellipsisText(g: CanvasRenderingContext2D, s: string, x: number, y: number, size: number, width: number, color: string, align: CanvasTextAlign = "left"): void {
+  g.font = font(size);
+  if (g.measureText(s).width > width) {
+    const chars = [...s];
+    while (chars.length && g.measureText(chars.join("") + "…").width > width) chars.pop();
+    s = chars.join("") + "…";
+  }
+  text(g, s, x, y, size, color, align);
+}
+
+/** Open separators fade at their ends, without enclosing the menu content. */
+export function accentLine(g: CanvasRenderingContext2D, x: number, y: number, width: number, color = SKIN.accent): void {
+  const glow = g.createLinearGradient(x, y, x + width, y);
+  glow.addColorStop(0, alpha(color, 0));
+  glow.addColorStop(0.2, alpha(color, 0.3));
+  glow.addColorStop(0.5, alpha(color, 0.65));
+  glow.addColorStop(0.8, alpha(color, 0.3));
+  glow.addColorStop(1, alpha(color, 0));
+  g.fillStyle = glow;
+  g.fillRect(x, y, width, 2);
+}
+
 /** Wrap on words, with a character fallback for Korean and long words. */
-export function wrapText(g: CanvasRenderingContext2D, s: string, x: number, y: number, width: number, size: number, lineHeight: number, color = SKIN.text): number {
+export function wrapText(g: CanvasRenderingContext2D, s: string, x: number, y: number, width: number, size: number, lineHeight: number, color = SKIN.text, align: CanvasTextAlign = "left"): number {
   g.font = font(size);
   const lines: string[] = [];
   for (const paragraph of s.split("\n")) {
@@ -56,7 +79,7 @@ export function wrapText(g: CanvasRenderingContext2D, s: string, x: number, y: n
     }
     lines.push(line);
   }
-  lines.forEach((line, i) => text(g, line, x, y + i * lineHeight, size, color, "left"));
+  lines.forEach((line, i) => text(g, line, x, y + i * lineHeight, size, color, align));
   return lines.length * lineHeight;
 }
 

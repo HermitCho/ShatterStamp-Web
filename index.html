@@ -29,8 +29,8 @@
         -webkit-tap-highlight-color: transparent;
         isolation: isolate;
         background:
-          radial-gradient(ellipse at 14% 28%, #14263788, transparent 45%),
-          radial-gradient(ellipse at 86% 62%, #46204466, transparent 46%),
+          radial-gradient(ellipse at 18% 32%, #14304488, transparent 48%),
+          radial-gradient(ellipse at 82% 58%, #51214b77, transparent 48%),
           linear-gradient(150deg, #0c0a1a, #090715 60%, #170d24);
       }
       body::before, body::after {
@@ -64,29 +64,39 @@
       /* 개인정보처리방침·약관 링크: 게임 화면 아래 여백에 작게 */
       .legal {
         position: fixed;
+        z-index: 11;
         left: 0;
         right: 0;
-        bottom: 3px;
+        bottom: max(5px, env(safe-area-inset-bottom));
         text-align: center;
-        font: 11px/1.4 system-ui, sans-serif;
+        font: 11px/1.5 system-ui, sans-serif;
         pointer-events: none;
       }
       .legal a {
-        color: #a5a4be99;
+        color: #b4b0c9;
         text-decoration: none;
         pointer-events: auto;
-        padding: 2px 4px;
+        padding: 5px 6px;
+        text-shadow: 0 1px 5px #090715;
       }
       .legal a:hover { color: #e6e8f5; }
+      .legal a:focus-visible { outline: 1px solid #40f2ff; outline-offset: 2px; border-radius: 2px; }
+      /* Keep a footer gutter when the portrait canvas would otherwise fill the height.
+         Pointer coordinates already use the canvas's displayed bounds. */
+      @media (max-width: 899px), (max-height: 599px) {
+        canvas {
+          width: min(100vw, calc((100vh - 48px) * 0.5625)) !important;
+          width: min(100vw, calc((100dvh - 48px - env(safe-area-inset-bottom, 0px) * 2) * 0.5625)) !important;
+          height: auto !important;
+        }
+      }
       @media (min-width: 900px) and (min-height: 600px) {
         canvas {
-          border-radius: 24px;
+          border-radius: 16px;
           box-shadow:
-            0 0 0 1px #a68ac738,
-            0 0 0 8px #12101ee6,
-            0 0 0 9px #705b812e,
-            -35px 0 110px #31d9ee0e,
-            35px 0 110px #ef44ca12,
+            0 0 0 1px #a68ac72e,
+            -40px 0 140px #31d9ee12,
+            40px 0 140px #ef44ca18,
             0 26px 80px #0009;
         }
       }
@@ -94,7 +104,7 @@
   </head>
   <body>
     <canvas id="game"></canvas>
-    <nav class="legal"><a href="./privacy.html">개인정보처리방침</a>·<a href="./terms.html">이용약관</a></nav>
+    <nav class="legal"><a href="./privacy.html" data-i18n="LEGAL_PRIVACY">개인정보처리방침</a>·<a href="./terms.html" data-i18n="LEGAL_TERMS">이용약관</a></nav>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

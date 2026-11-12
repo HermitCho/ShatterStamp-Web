@@ -16,7 +16,7 @@ const GATHER_TIME = 0.42, STAGGER = 0.05, SLAM_AT = 0.78, SLAM_TIME = 0.14;
 const SLANT = -0.22;
 /** 로고 위치(Godot의 로고 상자 y=150 기준) */
 const LOGO_Y = 100;
-const HORIZON = 1030;
+const HORIZON = 1070;
 const LOGO_ZONE = { x: 40, y: 120, w: 640, h: 440 };
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -172,7 +172,7 @@ export class TitleScreen {
       let a = f.a;
       if (f.x > LOGO_ZONE.x && f.x < LOGO_ZONE.x + LOGO_ZONE.w && f.y > LOGO_ZONE.y && f.y < LOGO_ZONE.y + LOGO_ZONE.h) a *= 0.25;
       // Open menu labels need quiet space even when a floater passes behind them.
-      if (f.x > 84 && f.x < 636 && f.y > 580 && f.y < 1080) a *= 0.18;
+      if (f.x > 84 && f.x < 636 && f.y > 540 && f.y < 1280) a *= 0.12;
       g.save();
       g.translate(f.x, f.y);
       g.rotate(f.rot);

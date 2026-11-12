@@ -3,7 +3,7 @@ const TEXT = {
   SCORE: ["점수", "SCORE"],
   TIME: ["시간", "TIME"],
   BEST_FMT: ["최고 %d", "BEST %d"],
-  TARGET_FMT: ["%d점 이상 +1초", "+1s AT %d PTS"],
+  TARGET_FMT: ["%d점 → +1초", "%d PTS → +1s"],
   HOLD: ["홀드", "HOLD"],
   HOLD_HINT: ["탭하여\n보관", "Tap to\nhold"],
   NOW: ["지금", "NOW"],
@@ -30,7 +30,16 @@ const TEXT = {
   RANK_NICK: ["닉네임", "NICKNAME"],
   RANK_NICK_UNSET: ["정하기", "SET"],
   RANK_LOGOUT: ["로그아웃", "SIGN OUT"],
-  RANK_GUEST: ["로그인하면 내 점수도 랭킹에 올라가요", "Sign in to put your scores on the board"],
+  RANK_GUEST: ["로그인하고 내 기록을 랭킹에 남겨 보세요", "Sign in and put your best on the board"],
+  RANK_PLACE: ["순위", "RANK"],
+  RANK_PLAYER: ["닉네임", "PLAYER"],
+  RANK_DATE: ["날짜", "DATE"],
+  RANK_COMBO: ["콤보", "COMBO"],
+  RANK_ME: ["나", "ME"],
+  RANK_MY_PLACE: ["내 순위", "MY RANK"],
+  RANK_PLACE_FMT: ["%d위", "#%d"],
+  RANK_EDIT_NAME: ["닉네임 변경", "EDIT NICKNAME"],
+  RANK_GUEST_RECORDS: ["로그인하면 내 기록을 볼 수 있어요", "Sign in to see your personal bests"],
   RANK_OFF: ["랭킹은 준비 중이에요", "Ranking is coming soon"],
   RANK_LOADING: ["불러오는 중…", "Loading…"],
   RANK_ERROR: ["불러오지 못했어요. 잠시 뒤 다시 열어 주세요", "Couldn't load. Please try again later"],
@@ -62,7 +71,13 @@ const TEXT = {
   HOWTO_SUB: ["세 가지만 기억하면 준비 완료", "Three things. Then you're ready."],
   SETTINGS_SUB: ["나에게 맞는 플레이 감각", "Make the arcade your own."],
   PAUSE_SUB: ["잠깐 쉬어 가도 괜찮아요", "Take a breath. Your run can wait."],
-  PAUSE_META: ["준비되면 이어서 도전하세요", "Your next great stamp is waiting."],
+  PAUSE_META: ["3 · 2 · 1 뒤에 이어서 시작해요", "Resume after a 3 · 2 · 1 countdown"],
+  COUNTDOWN_READY: ["준비하세요", "GET READY"],
+  RESUME_READY: ["이어서 도전", "BACK TO YOUR RUN"],
+  COUNTDOWN_HINT: ["카운트다운이 끝나면 시간이 흘러요", "The clock starts after the countdown"],
+  PAUSE_LOCK_FMT: ["%d초", "%ds"],
+  LEGAL_PRIVACY: ["개인정보처리방침", "Privacy Policy"],
+  LEGAL_TERMS: ["이용약관", "Terms of Service"],
   SOUND: ["효과음", "SOUND EFFECTS"],
   MUSIC: ["배경 음악", "MUSIC"],
   AUDIO: ["사운드", "AUDIO"],
@@ -147,6 +162,7 @@ export function t(key: TextKey, ...args: (number | string)[]): string {
 
 export function setLang(code: "ko" | "en"): void {
   lang = code === "en" ? 1 : 0;
+  updateDocumentLanguage();
   try {
     localStorage.setItem("ss.lang", code);
   } catch {
@@ -157,3 +173,14 @@ export function setLang(code: "ko" | "en"): void {
 export function getLang(): "ko" | "en" {
   return lang === 1 ? "en" : "ko";
 }
+
+function updateDocumentLanguage(): void {
+  if (typeof document === "undefined") return;
+  document.documentElement.lang = getLang();
+  document.querySelectorAll<HTMLElement>("[data-i18n]").forEach((el) => {
+    const key = el.dataset.i18n as TextKey;
+    if (key in TEXT) el.textContent = t(key);
+  });
+}
+
+updateDocumentLanguage();

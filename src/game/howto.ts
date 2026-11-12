@@ -87,17 +87,17 @@ export class Howto {
       g.fillRect(x, y - 16, w, 1);
     }
     const n = kind + 1;
-    text(g, t("HOWTO_STEP_FMT", String(n).padStart(2, "0")), x, y + 34, 26, SKIN.accent, "left");
-    fitText(g, t(`HOWTO_C${n}_T` as TextKey), x + 64, y + 34, 32, w - 64, SKIN.text);
+    text(g, t("HOWTO_STEP_FMT", String(n).padStart(2, "0")), x, y + 34, 28, SKIN.accent, "left");
+    fitText(g, t(`HOWTO_C${n}_T` as TextKey), x + 64, y + 34, 34, w - 64, SKIN.text);
     if (kind === 0) {
-      wrapText(g, t("HOWTO_C1_B"), x, y + 76, w, 26, 34, "#c5c3d6");
-      this.drawSpread(g, x, y + 170, w);
+      wrapText(g, t("HOWTO_C1_B"), x, y + 82, w, 28, 36, "#d0cddd");
+      this.drawSpread(g, x, y + 186, w);
       return;
     }
     const pic = { x, y: y + 62, w: 194, h: 120 };
     if (kind === 1) drawGrades(g, pic);
     else drawCombo(g, pic);
-    wrapText(g, t(`HOWTO_C${n}_B` as TextKey), x + 226, y + 82, w - 226, 25, 33, "#c5c3d6");
+    wrapText(g, t(`HOWTO_C${n}_B` as TextKey), x + 224, y + 80, w - 224, 27, 35, "#d0cddd");
   }
 
   private drawSpread(g: CanvasRenderingContext2D, x: number, y: number, w: number): void {
@@ -124,16 +124,16 @@ export class Howto {
     g.restore();
 
     const tx = x + boardW + 44, tw = w - boardW - 44;
-    fitText(g, t("HOWTO_STAMP_FMT", spread.stamp.length), tx, y + 40, 24, tw, SKIN.text);
-    fitText(g, t("HOWTO_STAMP_LEGEND"), tx, y + 74, 22, tw, SKIN.text);
+    fitText(g, t("HOWTO_STAMP_FMT", spread.stamp.length), tx, y + 40, 27, tw, SKIN.text);
+    fitText(g, t("HOWTO_STAMP_LEGEND"), tx, y + 76, 25, tw, SKIN.muted);
     const cx = tx + tw / 2;
     g.save();
     g.strokeStyle = SKIN.accent; g.lineWidth = 3; g.lineCap = "round";
     g.beginPath(); g.moveTo(cx, y + 95); g.lineTo(cx, y + 119);
     g.moveTo(cx - 8, y + 111); g.lineTo(cx, y + 119); g.lineTo(cx + 8, y + 111); g.stroke();
     g.restore();
-    fitText(g, t("HOWTO_BREAK_FMT", hit.size), tx, y + 158, 26, tw, ready ? SKIN.text : SKIN.accent);
-    fitText(g, t("HOWTO_BREAK_LEGEND"), tx, y + 192, 22, tw, SKIN.text);
+    fitText(g, t("HOWTO_BREAK_FMT", hit.size), tx, y + 158, 28, tw, ready ? SKIN.text : SKIN.accent);
+    fitText(g, t("HOWTO_BREAK_LEGEND"), tx, y + 194, 25, tw, SKIN.muted);
   }
 
   /** Teaching overlays only; every block and break is drawn by BoardView/Fx. */
@@ -166,8 +166,8 @@ function drawGrades(g: CanvasRenderingContext2D, pic: Box): void {
   items.forEach(([n, gi], i) => {
     const col = SKIN.grades[gi], y = pic.y + 21 + i * 30;
     g.fillStyle = col; g.fillRect(pic.x, y - 18, 3, 20);
-    text(g, t("POINTS_FMT", n), pic.x + 14, y, 23, SKIN.text, "left");
-    text(g, t(GRADE_KEYS[gi]), pic.x + 66, y, 22, col, "left");
+    text(g, t("POINTS_FMT", n), pic.x + 14, y, 25, SKIN.text, "left");
+    text(g, t(GRADE_KEYS[gi]), pic.x + 66, y, 24, col, "left");
   });
 }
 

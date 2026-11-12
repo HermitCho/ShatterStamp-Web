@@ -1,5 +1,5 @@
 import { roundRect } from "./board-view.ts";
-import { panel, text, wrapText } from "./draw.ts";
+import { accentLine, text, wrapText } from "./draw.ts";
 import { t, type TextKey } from "./i18n.ts";
 import { alpha, SKIN } from "./skin.ts";
 
@@ -8,7 +8,7 @@ import { alpha, SKIN } from "./skin.ts";
  * 진행(언제 다음 단계로 갈지)은 Game이 정하고, 여기서는 그리기와 건너뛰기 버튼 판정만 한다.
  */
 const BOX = { x: 24, y: 1042, w: 672, h: 190 };
-const SKIP = { x: BOX.x + BOX.w - 164, y: BOX.y + 12, w: 148, h: 56 };
+const SKIP = { x: BOX.x + BOX.w - 180, y: BOX.y + 6, w: 164, h: 76 };
 
 export interface Rect {
   x: number;
@@ -70,20 +70,22 @@ export class Tutorial {
     g.save();
     g.translate(BOX.x + BOX.w / 2 + dx, BOX.y + BOX.h / 2);
     g.scale(s, s);
-    panel(g, -BOX.w / 2, -BOX.h / 2, BOX.w, BOX.h, "#437c86", 22);
+    const glow = g.createLinearGradient(0, -BOX.h / 2, 0, BOX.h / 2);
+    glow.addColorStop(0, "rgba(64,242,255,0.06)");
+    glow.addColorStop(1, "rgba(9,7,21,0)");
+    g.fillStyle = glow; g.fillRect(-BOX.w / 2, -BOX.h / 2, BOX.w, BOX.h);
+    accentLine(g, -BOX.w / 2, -BOX.h / 2, BOX.w);
     const label = this.step <= this.total ? t("TUT_PROGRESS", this.step, this.total) : t("TUTORIAL_BTN");
-    text(g, label, -BOX.w / 2 + 24, -BOX.h / 2 + 46, 26, SKIN.accent, "left");
+    text(g, label, -BOX.w / 2 + 24, -BOX.h / 2 + 52, 28, SKIN.accent, "left");
     for (let i = 0; i < this.total; i++) {
-      roundRect(g, -36 + i * 32, -BOX.h / 2 + 33, 22, 6, 3);
+      roundRect(g, -16 + i * 30, -BOX.h / 2 + 40, 20, 6, 3);
       g.fillStyle = i < this.step ? SKIN.accent : "#35334a"; g.fill();
     }
-    wrapText(g, t(this.key), -BOX.w / 2 + 24, -BOX.h / 2 + 100, BOX.w - 48, 28, 34);
+    wrapText(g, t(this.key), -BOX.w / 2 + 24, -BOX.h / 2 + 104, BOX.w - 48, 29, 37);
     g.restore();
     if (this.step <= this.total) {
-      roundRect(g, SKIP.x, SKIP.y, SKIP.w, SKIP.h, 14);
-      g.fillStyle = "rgba(235,250,255,0.08)";
-      g.fill();
-      text(g, t("TUT_SKIP"), SKIP.x + SKIP.w / 2, SKIP.y + 37, 26, SKIN.text, "center");
+      text(g, t("TUT_SKIP"), SKIP.x + SKIP.w / 2, SKIP.y + 47, 28, SKIN.text, "center");
+      accentLine(g, SKIP.x + 18, SKIP.y + 60, SKIP.w - 36, SKIN.muted);
     }
   }
 

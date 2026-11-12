@@ -14,7 +14,7 @@ import { StageFx } from "./stage.ts";
 import { TitleScreen } from "./title.ts";
 import { Tutorial, type Rect as TRect } from "./tutorial.ts";
 import { GRADE_KEYS, t } from "./i18n.ts";
-import { fitText, outlined, panel, text } from "./draw.ts";
+import { accentLine, fitText, outlined, panel, text } from "./draw.ts";
 import { alpha, font, mix, SKIN } from "./skin.ts";
 import { ease, Tweens } from "./tween.ts";
 
@@ -1043,7 +1043,8 @@ export class Game {
     this.drawHud(g);
     this.drawSlots(g);
     this.tutorial.draw(g);
-    for (const f of this.floats) this.drawFloat(g, f);
+    if (this.state !== "countdown") for (const f of this.floats) this.drawFloat(g, f);
+    if (this.state === "countdown") this.drawCountdownBackdrop(g);
     this.stage.draw(g);
     if (this.flash.a > 0.001) {
       g.globalAlpha = this.flash.a * 0.3;
@@ -1060,7 +1061,7 @@ export class Game {
     panel(g, 24, 24, 672, 206);
     text(g, t("SCORE"), 48, 67, 27, SKIN.score, "left");
     fitText(g, r.score.toLocaleString(), 48, 133, 60, 250, SKIN.text);
-    fitText(g, t("BEST_FMT", Math.max(this.best, 0).toLocaleString()), 48, 177, 25, 260, SKIN.muted);
+    fitText(g, t("BEST_FMT", Math.max(this.best, 0).toLocaleString()), 48, 177, 27, 260, SKIN.muted);
     text(g, t("TIME"), 672, 67, 27, SKIN.timeText, "right");
     // 남은 시간 60·30·10초 기준: 숫자 노랑→주황→빨강, 막대 하늘→보라→빨강
     const tl = Math.max(0, r.timeLeft);
@@ -1073,7 +1074,8 @@ export class Game {
     g.scale(pulse, pulse);
     fitText(g, tl.toFixed(1), 0, 20, 60, 228, timeCol, "right");
     g.restore();
-    if (this.state === "play") fitText(g, t("TARGET_FMT", r.timeTarget()), 672, 177, 24, 304, "#a9d8bf", "right");
+    const timeBonus = this.floats.some((f) => f.placement === "time" && f.alpha > 0.01);
+    if (this.state === "play" && !timeBonus) fitText(g, t("TARGET_FMT", r.timeTarget()), 672, 177, 29, 272, "#c0ead5", "right");
     roundRect(g, 48, 202, 624, 8, 4);
     g.fillStyle = "#30273e"; g.fill();
     g.fillStyle = barCol;
@@ -1083,7 +1085,7 @@ export class Game {
     // All combo and grade feedback lives in this strip, clear of the board.
     panel(g, 24, 252, 672, 124, this.inFever ? "#683159" : SKIN.panelBorder, 20);
     const c = this.comboText;
-    if (!this.inFever) text(g, t("ARCADE_TAG"), 48, 292, 23, SKIN.muted, "left");
+    if (!this.inFever) text(g, t("ARCADE_TAG"), 48, 292, 26, SKIN.muted, "left");
     if (c.alpha > 0.01 && c.text) {
       g.save();
       g.globalAlpha = c.alpha;
@@ -1099,13 +1101,13 @@ export class Game {
       g.globalAlpha = 1;
     }
     if (!this.gradeFloat || this.gradeFloat.alpha <= 0.01) {
-      fitText(g, t("PLAY_HINT"), 360, 349, 26, 624, SKIN.muted, "center");
+      fitText(g, t("PLAY_HINT"), 360, 349, 28, 624, SKIN.muted, "center");
     }
     const touch = this.touchControls.matches;
     if (this.state !== "tutorial") {
       panel(g, 24, 1070, 672, 114);
-      text(g, t(touch ? "TOUCH_HINT" : "FOOTER"), 360, 1117, 27, SKIN.muted, "center");
-      text(g, t(touch ? "TOUCH_HOLD" : "FOOTER_PAUSE"), 360, 1158, 25, SKIN.muted, "center");
+      fitText(g, t(this.state === "countdown" ? "COUNTDOWN_HINT" : touch ? "TOUCH_HINT" : "FOOTER"), 360, 1117, 29, 624, SKIN.text, "center");
+      fitText(g, t(touch ? "TOUCH_HOLD" : "FOOTER_PAUSE"), 360, 1158, 28, 624, SKIN.muted, "center");
     } else fitText(g, t(touch ? "TOUCH_HINT" : "HOWTO_KEYS"), 360, 1260, 24, 672, SKIN.muted, "center");
   }
 
@@ -1119,7 +1121,7 @@ export class Game {
         text(g, t(s.title as "HOLD" | "NOW"), s.x + s.w / 2, s.y + 34, 27, s.highlight ? SKIN.score : SKIN.text, "center");
         top = 42;
       }
-      if (s.hint && s.cells.length === 0) t(s.hint as "HOLD_HINT").split("\n").forEach((line, i) => text(g, line, s.x + s.w / 2, s.y + 74 + i * 28, 24, SKIN.muted, "center"));
+      if (s.hint && s.cells.length === 0) t(s.hint as "HOLD_HINT").split("\n").forEach((line, i) => text(g, line, s.x + s.w / 2, s.y + 74 + i * 30, 28, "#c5c3d6", "center"));
       g.beginPath();
       g.rect(s.x, s.y, s.w, s.h);
       g.clip();
@@ -1131,7 +1133,7 @@ export class Game {
       }
       g.restore();
     }
-    text(g, t("NEXT"), SIDE_X + SIDE_W / 2, this.nexts[0].y - 8, 24, SKIN.muted, "center");
+    text(g, t("NEXT"), SIDE_X + SIDE_W / 2, this.nexts[0].y - 8, 26, SKIN.muted, "center");
   }
 
   private drawPiece(g: CanvasRenderingContext2D, s: Slot, top: number): void {
@@ -1169,10 +1171,10 @@ export class Game {
       g.restore();
       return;
     }
-    // Time bonuses sit below the timer; other small notices retain their location.
+    // Time bonuses temporarily replace the target, keeping the HUD gutter clear.
     if (f.placement === "time") {
       g.save(); g.globalAlpha = Math.max(0, Math.min(1, f.alpha));
-      text(g, f.lines[0].text, 670, 247, 25, f.lines[0].color, "right");
+      text(g, f.lines[0].text, 672, 177, 32, f.lines[0].color, "right", f.lines[0].color);
       g.restore();
       return;
     }
@@ -1195,20 +1197,43 @@ export class Game {
     g.restore();
   }
 
+  private drawCountdownBackdrop(g: CanvasRenderingContext2D): void {
+    // The board remains visible while the numeral gets a quiet focal area.
+    g.save();
+    const shade = g.createRadialGradient(360, 720, 50, 360, 720, 440);
+    shade.addColorStop(0, "rgba(9,7,21,0.88)");
+    shade.addColorStop(0.65, "rgba(9,7,21,0.7)");
+    shade.addColorStop(1, "rgba(9,7,21,0.22)");
+    g.fillStyle = shade; g.fillRect(16, 392, 688, 640);
+    text(g, t(this.pauseLock > 0 ? "RESUME_READY" : "COUNTDOWN_READY"), 360, 536, 34, SKIN.accent, "center");
+    accentLine(g, 280, 568, 160);
+    g.restore();
+  }
+
   private drawPauseButton(g: CanvasRenderingContext2D): void {
     const b = PAUSE_BTN;
     const locked = this.state === "countdown" || this.pauseLock > 0;
     g.save();
-    if (locked) g.globalAlpha *= 0.4;
     panel(g, b.x, b.y, b.w, b.h, SKIN.panelBorder, 24);
-    g.fillStyle = SKIN.text;
-    g.fillRect(b.x + 31, b.y + 28, 8, 28);
-    g.fillRect(b.x + 45, b.y + 28, 8, 28);
+    if (locked) {
+      // A lock silhouette plus the progress ring explains why pause is unavailable.
+      g.strokeStyle = SKIN.timeText; g.lineWidth = 4;
+      g.beginPath(); g.arc(b.x + 42, b.y + 34, 10, Math.PI, Math.PI * 2); g.stroke();
+      roundRect(g, b.x + 27, b.y + 34, 30, 24, 5);
+      g.fillStyle = SKIN.timeText; g.fill();
+      g.fillStyle = SKIN.panel; g.fillRect(b.x + 40, b.y + 42, 4, 8);
+    } else {
+      g.fillStyle = SKIN.text;
+      g.fillRect(b.x + 31, b.y + 28, 8, 28);
+      g.fillRect(b.x + 45, b.y + 28, 8, 28);
+    }
     g.restore();
     // 다시 멈출 수 있을 때까지 남은 시간: 버튼 둘레를 따라 차오르는 빛
-    if (this.state === "play" && this.pauseLock > 0) {
-      const k = 1 - this.pauseLock / PAUSE_LOCK;
+    if (locked) {
+      const k = this.state === "play" ? 1 - this.pauseLock / PAUSE_LOCK : 0;
       g.save();
+      g.strokeStyle = alpha(SKIN.accent, 0.18); g.lineWidth = 4;
+      g.beginPath(); g.arc(b.x + b.w / 2, b.y + b.h / 2, b.w / 2 + 6, 0, Math.PI * 2); g.stroke();
       g.strokeStyle = SKIN.accent;
       g.lineWidth = 4;
       g.lineCap = "round";
@@ -1217,6 +1242,7 @@ export class Game {
       g.beginPath();
       g.arc(b.x + b.w / 2, b.y + b.h / 2, b.w / 2 + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
       g.stroke();
+      if (this.state === "play") text(g, t("PAUSE_LOCK_FMT", Math.ceil(this.pauseLock)), b.x + b.w / 2, 175, 26, SKIN.timeText, "center");
       g.restore();
     }
   }
