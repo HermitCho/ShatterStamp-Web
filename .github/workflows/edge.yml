@@ -42,8 +42,8 @@ jobs:
             exit 1
           fi
       # 로그인 확인은 함수 안에서 직접 하므로 게이트웨이 JWT 검사는 끈다. Docker 없이 서버에서 묶는다(--use-api).
-      # CLI 버전은 고정한다(새 버전이 몰래 바뀌어 배포에 끼어들지 않게).
+      # CLI 버전은 고정한다(새 버전이 몰래 바뀌어 배포에 끼어들지 않게). 자동 실행이라 배포 확인 질문에는 --yes로 답한다.
       - name: Deploy submit-run
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-        run: npx --yes supabase@3.1.0 functions deploy submit-run --remote=brydmjqtutbgphkzsocl --no-verify-jwt --use-api
+        run: npx --yes supabase@3.1.0 functions deploy submit-run --remote=brydmjqtutbgphkzsocl --no-verify-jwt --use-api --yes
