@@ -68,6 +68,8 @@ export class BoardView {
   beat = 0;
   /** 0~1: 피버 색(판 바탕·빈 칸·테두리가 분홍·금색 쪽으로 바뀐다) */
   feverMix = 0;
+  /** 미리보기 표시가 피해야 할 자리(화면 좌표, 떠 있는 점수 조각) */
+  avoid: { x: number; y: number; w: number; h: number }[] = [];
   /** 판 바깥으로 퍼지는 테두리 빛 고리 */
   private frames: { t: number; max: number; grow: number; color: string }[] = [];
   private blocks: (BlockEnt | null)[] = [];
@@ -327,7 +329,8 @@ export class BoardView {
   }
 
   private drawPill(g: CanvasRenderingContext2D, pv: Preview, col: string): void {
-    const countText = t("POINTS_FMT", pv.all.length);
+    // 깨질 블록 수(점수 조각 「+832」와 헷갈리지 않게 「13칸」)
+    const countText = t("CELLS_FMT", pv.all.length);
     const gradeText = t(GRADE_KEYS[pv.grade]);
     g.font = font(34);
     const cw = g.measureText(countText).width;
@@ -347,7 +350,20 @@ export class BoardView {
       y = (bottom + 1) * CELL + 8;
       if (bottom === this.model.rows - 1) y = this.anchor!.y * CELL - h / 2;
     }
+    // 떠 있는 점수 조각과 겹치면 모양 아래(또는 위)로 옮기고, 둘 다 막히면 흐리게
+    const hits = (py: number) => {
+      const sx = this.ox + (cx - w / 2) * this.scale, sy = this.oy + py * this.scale, sw = w * this.scale, sh = h * this.scale;
+      return this.avoid.some((r) => sx < r.x + r.w && r.x < sx + sw && sy < r.y + r.h && r.y < sy + sh);
+    };
+    let dim = 1;
+    if (hits(y)) {
+      const below = (bottom + 1) * CELL + 8, above = top * CELL - h - 8;
+      const alt = [below, above].find((v) => v !== y && v >= -h / 2 && v + h <= this.model.rows * CELL + h / 2 && !hits(v));
+      if (alt !== undefined) y = alt;
+      else dim = 0.3;
+    }
     g.save();
+    g.globalAlpha *= dim;
     if (pv.grade === Grade.PERFECT) {
       g.shadowColor = alpha(col, 0.7);
       g.shadowBlur = 18;

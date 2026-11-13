@@ -692,13 +692,16 @@ export class Menus {
   }
 
   /** 「NEW BEST!」 기울어진 도장: 점수 오른쪽 위에 크게 떨어져 쾅 */
-  private drawBestStamp(g: CanvasRenderingContext2D, a: number, scale: number): void {
+  private drawBestStamp(g: CanvasRenderingContext2D, a: number, scale: number, score: number): void {
     const col = SKIN.timeText;
     g.save();
     g.globalAlpha *= a;
-    g.translate(566, 296);
-    g.rotate(-0.16);
-    g.scale(scale, scale);
+    // 점수 숫자 오른쪽 끝 위에 붙인다: 일곱 자리(1,234,567)일 때 x 600, 점수가 짧으면 그만큼 왼쪽으로(윗줄 글자는 피해 540까지)
+    const w = (v: number) => Math.min(558, this.look.width(v.toLocaleString(), 108));
+    const x = Math.max(540, 600 - (w(1234567) - w(score)) / 2);
+    g.translate(x, 274);
+    g.rotate(-0.1);
+    g.scale(scale * 0.75, scale * 0.75);
     roundRect(g, -112, -34, 224, 68, 12);
     g.fillStyle = "rgba(9,7,21,0.82)";
     g.fill();
@@ -739,7 +742,7 @@ export class Menus {
       wrapText(g, this.resultRank, 360, 542, 600, 30, 38, SKIN.accent, "center");
     }
     g.restore();
-    if (an.stamp > 0) this.drawBestStamp(g, an.stamp, an.stampScale);
+    if (an.stamp > 0) this.drawBestStamp(g, an.stamp, an.stampScale, r.score);
     const statX = [160, 0, 360, 560];
     an.rows.forEach((row, i) => {
       if (row.a <= 0) return;

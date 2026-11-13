@@ -438,6 +438,15 @@ export class Game {
     if (ctx) this.music.attach(ctx);
   }
 
+  /** 탭·앱을 벗어나면: 진행 중인 판은 일시정지 화면으로(이어한 직후 잠금도 무시), 소리는 끈다. */
+  setHidden(hidden: boolean): void {
+    if (hidden && this.state === "play") {
+      this.pauseLock = 0;
+      this.pause();
+    }
+    this.sfx.setSuspended(hidden);
+  }
+
   private pause(): void {
     if (this.state !== "play") return;
     if (this.pauseLock > 0) {
@@ -888,13 +897,17 @@ export class Game {
     ];
     if (r.grade !== Grade.PERFECT && r.bestN > 0) lines.push({ text: t("GRADE_SUB", ev.count, r.bestN), size: 26, color: SKIN.text });
     if (this.gradeFloat) this.gradeFloat.alpha = 0;
-    const f = this.float(lines, Math.min(Math.max(ev.ax, 230), 490), ev.ay - 10, false, r.grade);
+    // 판 위쪽 줄의 판정·깬 수·점수는 읽을 시간이 있게 다른 글자보다 두 배 오래 둔다(다음 도장을 찍으면 바로 바뀜)
+    const f = this.float(lines, Math.min(Math.max(ev.ax, 230), 490), ev.ay - 10, false, r.grade, 2);
     f.placement = "grade";
     this.gradeFloat = f;
   }
 
-  /** 떠오르는 글자. kind: 판정마다 움직임이 다르다(PERFECT 쾅 / GREAT 튀어나옴 / MISS 흔들리다 떨어짐). */
-  private float(lines: FloatText["lines"], x: number, y: number, big = false, kind: number = Grade.GOOD): FloatText {
+  /**
+   * 떠오르는 글자. kind: 판정마다 움직임이 다르다(PERFECT 쾅 / GREAT 튀어나옴 / MISS 흔들리다 떨어짐).
+   * stay: 머무르고 사라지는 시간 배율(튀어나오는 순간은 그대로)
+   */
+  private float(lines: FloatText["lines"], x: number, y: number, big = false, kind: number = Grade.GOOD, stay = 1): FloatText {
     const f: FloatText = { lines, x, y, scale: 1, alpha: 1, dx: 0 };
     this.floats.push(f);
     const tw = this.tweens.add();
@@ -905,27 +918,27 @@ export class Game {
         f.scale = 1.6 - 0.6 * k;
         f.alpha = Math.min(1, k * 2);
       }, ease.inQuad)
-        .wait(big ? 0.5 : 0.28)
-        .to(0.45, (k) => {
+        .wait((big ? 0.5 : 0.28) * stay)
+        .to(0.45 * stay, (k) => {
           f.y = y - 70 * k;
           f.alpha = 1 - k;
         }, ease.outCubic);
     } else if (kind === Grade.GREAT) {
       f.scale = 1.6;
       tw.to(0.18, (k) => (f.scale = 1.6 - 0.6 * k), ease.outBack)
-        .wait(0.12)
-        .to(0.5, (k) => {
+        .wait(0.12 * stay)
+        .to(0.5 * stay, (k) => {
           f.y = y - 80 * k;
           f.alpha = 1 - Math.max(0, (k - 0.2) / 0.8);
         }, ease.outCubic);
     } else if (kind === Grade.MISS) {
       tw.to(0.2, (k) => (f.dx = Math.sin(k * Math.PI * 5) * 12 * (1 - k)))
-        .to(0.45, (k) => {
+        .to(0.45 * stay, (k) => {
           f.y = y + 50 * k;
           f.alpha = 1 - k;
         }, ease.inQuad);
     } else {
-      tw.to(0.7, (k) => {
+      tw.to(0.7 * stay, (k) => {
         f.y = y - 90 * k;
         f.alpha = k < 0.4 ? 1 : 1 - (k - 0.4) / 0.6;
       }, ease.outCubic);
@@ -1024,6 +1037,7 @@ export class Game {
     this.bgMix += ((this.inFever ? 1 : 0) - this.bgMix) * Math.min(1, realDt * 6);
     this.tweens.update(dt);
     this.hype.update(dt);
+    this.board.avoid = this.hype.chipRects();
     this.board.feverMix = this.bgMix;
     this.board.update(dt);
     this.fx.update(dt);
@@ -1107,8 +1121,9 @@ export class Game {
     g.save();
     g.translate((Math.random() * 2 - 1) * s, (Math.random() * 2 - 1) * s);
     this.board.draw(g);
+    this.hype.drawCombo(g);
     this.fx.draw(g);
-    this.hype.drawBoardLayer(g);
+    this.hype.drawOverlay(g);
     g.restore();
     this.drawHud(g);
     this.drawSlots(g);

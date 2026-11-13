@@ -50,6 +50,13 @@ export class Sfx {
     for (const [name, d] of Object.entries(DEFS)) this.buffers.set(name, this.synth(...d));
   }
 
+  /** 탭·앱을 벗어났을 때 소리(효과음·배경 음악 모두)를 멈추고, 돌아오면 다시 켠다. */
+  setSuspended(on: boolean): void {
+    if (!this.ctx) return;
+    if (on && this.ctx.state === "running") void this.ctx.suspend();
+    else if (!on && this.ctx.state === "suspended") void this.ctx.resume();
+  }
+
   setVolume(v: number): void {
     this.volume = v;
     if (this.out) this.out.gain.value = v;

@@ -58,11 +58,18 @@ window.addEventListener("keydown", (e) => {
   game.key(e.code);
 });
 
+// 2) 탭·앱을 벗어나면 판을 멈추고 소리를 끈다
+document.addEventListener("visibilitychange", () => game.setHidden(document.hidden));
+
 let last = performance.now();
+let inGame = false;
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   game.update(dt);
+  // 1) 개인정보처리방침·이용약관 링크는 타이틀에서만 보인다(플레이 중 잘못 눌러 판이 날아가지 않게)
+  const ig = game.state !== "title";
+  if (ig !== inGame) document.body.classList.toggle("ingame", (inGame = ig));
   game.draw(g);
   requestAnimationFrame(frame);
 }

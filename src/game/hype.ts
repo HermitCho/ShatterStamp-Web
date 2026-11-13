@@ -84,9 +84,11 @@ export class Hype {
     this.combo = c;
     this.comboTw = this.tweens.add()
       .to(0.16, (k) => (c.scale = 1.7 - 0.7 * k), ease.outBack)
-      .wait(0.32)
+      // 툭 튀어나온 뒤엔 반투명으로 물러나 아래 블록이 보이게
+      .to(0.12, (k) => (c.a = 1 - 0.5 * k))
+      .wait(0.2)
       .to(0.32, (k) => {
-        c.a = 1 - k;
+        c.a = 0.5 * (1 - k);
         c.dy = -26 * k;
       }, ease.inQuad)
       .call(() => this.combo === c && (this.combo = null));
@@ -143,6 +145,14 @@ export class Hype {
       });
   }
 
+  /** 머물러 있는 점수 조각 자리(미리보기 표시가 피해 간다) */
+  chipRects(): { x: number; y: number; w: number; h: number }[] {
+    return this.chips.filter((c) => c.scale >= 1 && c.a > 0.05).map((c) => {
+      const w = c.text.length * 22 + 24;
+      return { x: c.x - w / 2, y: c.y - 22, w, h: 52 };
+    });
+  }
+
   /** 판이 끝날 때 등: 날아가던 점수를 바로 다 채운다. */
   flushChips(): void {
     this.chips = [];
@@ -153,8 +163,8 @@ export class Hype {
     this.tweens.update(dt);
   }
 
-  /** 판 위(콤보 숫자·칭찬 글자·띠) */
-  drawBoardLayer(g: CanvasRenderingContext2D): void {
+  /** 판 위 콤보 숫자: 부서지는 효과(원·조각)보다 아래에 그린다(그늘이 효과를 덮지 않게) */
+  drawCombo(g: CanvasRenderingContext2D): void {
     const c = this.combo;
     if (c && c.a > 0.01) {
       // 굵은 검은 테두리 없이 가는 네온 관 + 살짝 기울인 글자(띠·칭찬 글자와 같은 결)
@@ -165,7 +175,7 @@ export class Hype {
       g.transform(1, 0, -0.14, 1, 0, 0);
       // 블록 위에서도 읽히게 뒤를 부드럽게 어둡게
       const shade = g.createRadialGradient(0, 10, 10, 0, 10, 90);
-      shade.addColorStop(0, `rgba(5,3,15,${0.75 * a})`);
+      shade.addColorStop(0, `rgba(5,3,15,${0.4 * a})`);
       shade.addColorStop(1, "rgba(5,3,15,0)");
       g.fillStyle = shade;
       g.fillRect(-100, -80, 200, 180);
@@ -173,6 +183,10 @@ export class Hype {
       neonText(g, "COMBO", 0, 50, 22, mix(c.color, "#ffffff", 0.3), a * 0.9, 0.5, 5);
       g.restore();
     }
+  }
+
+  /** 판 위 칭찬 글자·띠: 효과보다 위 */
+  drawOverlay(g: CanvasRenderingContext2D): void {
     const p = this.praise;
     if (p && p.a > 0.01) {
       const bx = this.box;

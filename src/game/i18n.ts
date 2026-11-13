@@ -87,6 +87,7 @@ const TEXT = {
   GRADE_MISS: ["MISS", "MISS"],
   GRADE_STREAK_FMT: ["%s ×%d", "%s ×%d"],
   POINTS_FMT: ["+%d", "+%d"],
+  CELLS_FMT: ["%d칸", "%d ·"],
   TIME_DELTA_FMT: ["%s초", "%ss"],
   RESULT_TAG: ["이번 도전의 기록", "YOUR RUN, ALL WRAPPED UP"],
   RESULT_GRADES: ["스탬프 기록", "STAMP BREAKDOWN"],
@@ -149,7 +150,8 @@ try {
 
 export function t(key: TextKey, ...args: (number | string)[]): string {
   let s: string = TEXT[key][lang];
-  for (const a of args) s = s.replace(/%d|%s/, String(a));
+  // 숫자는 어디서나 쉼표를 붙인다(+2,250 · 1,110점)
+  for (const a of args) s = s.replace(/%d|%s/, typeof a === "number" ? a.toLocaleString("en-US") : a);
   return s;
 }
 

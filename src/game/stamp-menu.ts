@@ -62,7 +62,7 @@ export class StampMenu {
     return i % 2 ? SKIN.score : SKIN.accent;
   }
 
-  private width(label: string, size: number, weight = 900): number {
+  width(label: string, size: number, weight = 900): number {
     this.measure.font = font(size, weight);
     return this.measure.measureText(label).width;
   }
