@@ -76,16 +76,18 @@ tools/sim-balance.ts, tools/build-font.py, tools/sync-edge.ts
 
 ### 점수 검증 서버 함수 배포
 
-```
-npx supabase login                      # 처음 한 번, 브라우저로 로그인
-npm run deploy:edge                     # src/core 복사 → submit-run 배포
-```
-
-`deploy:edge`는 `node tools/sync-edge.ts`로 규칙 코드를 복사한 뒤
+**자동:** `src/core`(게임 규칙)·`supabase/functions`·`tools/sync-edge.ts`가 바뀌어 main에 올라오면
+GitHub Actions(`.github/workflows/edge.yml`)가 규칙 코드를 복사(`node tools/sync-edge.ts`) → `npm test` →
 `supabase functions deploy submit-run --remote=<프로젝트> --no-verify-jwt --use-api`를 실행한다
-(로그인 확인은 함수 안에서 직접 하므로 게이트웨이 JWT 검사는 끈다. Docker 없이 서버에서 묶는다).
-**게임 규칙(`src/core`)을 바꾸면** `REPLAY_VERSION`을 올리고, 사이트 배포와 함께 서버 함수도 다시 배포해야 한다.
-안 그러면 서버가 옛 규칙으로 계산해 기록이 거절된다(`npm test`가 복사본이 같은지 확인한다).
+(로그인 확인은 함수 안에서 직접 하므로 게이트웨이 JWT 검사는 끈다. Docker 없이 서버에서 묶는다. CLI 버전은 고정).
+손으로 다시 배포하려면 GitHub › Actions › Deploy edge function › Run workflow.
+
+**처음 한 번:** supabase.com › Account › Access Tokens 에서 토큰을 만들어
+GitHub 저장소 › Settings › Secrets and variables › Actions › `SUPABASE_ACCESS_TOKEN` 에 넣는다.
+토큰은 PC·채팅·저장소에 두지 않는다.
+
+**게임 규칙(`src/core`)을 바꾸면** `REPLAY_VERSION`을 올린다. 사이트와 서버 함수가 같은 push로 함께 배포된다
+(서버가 옛 규칙으로 계산하면 기록이 거절된다. `npm test`가 복사본이 같은지 확인한다).
 
 연결 정보가 비어 있으면 랭킹은 "준비 중"으로 보이고 게임은 그대로 동작한다. 라이브러리는 로그인 흔적이 있거나 랭킹을 열 때만 받는다.
 

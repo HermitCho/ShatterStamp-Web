@@ -1,0 +1,49 @@
+# 점수 검증 서버 함수(submit-run) 배포
+# 게임 규칙(src/core)이나 서버 함수가 바뀌어 main에 올라오면 규칙 코드를 복사 → 테스트 → Supabase에 배포한다.
+# 관리자 토큰은 GitHub 비밀 설정(SUPABASE_ACCESS_TOKEN)에만 있고, PC에는 두지 않는다.
+# 손으로 다시 배포할 때: GitHub › Actions › Deploy edge function › Run workflow
+name: Deploy edge function
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/core/**
+      - supabase/functions/**
+      - tools/sync-edge.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # 서버가 게임과 같은 규칙으로 판을 다시 돌리도록 규칙 코드를 복사하고, 같은지 테스트로 확인한다
+      - run: node tools/sync-edge.ts
+      - run: npm test
+      - name: Check token
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "::error::GitHub 비밀 설정에 SUPABASE_ACCESS_TOKEN 이 없습니다 (Settings › Secrets and variables › Actions)"
+            exit 1
+          fi
+      # 로그인 확인은 함수 안에서 직접 하므로 게이트웨이 JWT 검사는 끈다. Docker 없이 서버에서 묶는다(--use-api).
+      # CLI 버전은 고정한다(새 버전이 몰래 바뀌어 배포에 끼어들지 않게).
+      - name: Deploy submit-run
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: npx --yes supabase@3.1.0 functions deploy submit-run --remote=brydmjqtutbgphkzsocl --no-verify-jwt --use-api
