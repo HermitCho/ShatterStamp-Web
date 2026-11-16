@@ -181,6 +181,24 @@ begin
     execute 'reset role';
     select count(*)::text into v from public.leaderboard(50) l where l.score = 7013;
     names := names || text '랭킹에 닉네임 없는 손님 기록이 보이나'; wants := wants || text '0'; gots := gots || v;
+    -- 랭킹 스위치: 손님이 닉네임을 정하면 켜져 있을 때만 보인다
+    update public.ranking_settings set guests_ranked = true;
+    perform set_config('request.jwt.claims', json_build_object('sub', g, 'role', 'authenticated', 'is_anonymous', true)::text, true);
+    perform set_config('request.jwt.claim.sub', g::text, true);
+    execute 'set local role authenticated';
+    v := public.set_nickname('테스트손님');
+    names := names || text 'G: 손님 닉네임 정하기'; wants := wants || text 'ok'; gots := gots || v;
+    begin update public.ranking_settings set guests_ranked = false; v := 'updated'; exception when others then v := 'denied'; end;
+    names := names || text 'G: 랭킹 스위치 직접 바꾸기'; wants := wants || text 'denied'; gots := gots || v;
+    execute 'reset role';
+    select count(*)::text into v from public.leaderboard(50) l where l.score = 7013;
+    names := names || text '스위치 켬: 손님 기록이 랭킹에 보이나'; wants := wants || text '1'; gots := gots || v;
+    update public.ranking_settings set guests_ranked = false;
+    select count(*)::text into v from public.leaderboard(50) l where l.score = 7013;
+    names := names || text '스위치 끔: 손님 기록이 랭킹에 보이나'; wants := wants || text '0'; gots := gots || v;
+    select coalesce(m.rank::text, 'no rank') into v from public.rank_of(g) m;
+    names := names || text '스위치 끔: 손님 순위'; wants := wants || text 'no rank'; gots := gots || v;
+    update public.ranking_settings set guests_ranked = true;
     execute 'set local role service_role';
     v := public.merge_guest(a, b);
     names := names || text '서버: 손님이 아닌 계정을 옮기기'; wants := wants || text 'not_guest'; gots := gots || v;

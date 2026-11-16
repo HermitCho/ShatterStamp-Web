@@ -55,6 +55,8 @@ export interface Online {
   readonly guest: boolean;
   /** 지금 계정을 구분하는 값(바뀌었는지 볼 때만 쓴다) / 계정이 없으면 null */
   readonly account: string | null;
+  /** 손님도 랭킹에 보이는지 (서버 설정 스위치. 꺼져 있으면 손님은 Google 로그인해야 보인다) */
+  readonly guestsRanked: boolean;
   /** 로그인·닉네임 상태가 바뀔 때 */
   onChange: () => void;
   init(): Promise<void>;
@@ -101,6 +103,7 @@ class SupabaseOnline implements Online {
   readonly configured = SUPABASE_URL !== "" && SUPABASE_ANON_KEY !== "";
   nickname: string | null = null;
   guest = false;
+  guestsRanked = true;
   onChange = (): void => {};
   private client: SupabaseClient | null = null;
   private loading: Promise<SupabaseClient> | null = null;
@@ -195,8 +198,9 @@ class SupabaseOnline implements Online {
     } else {
       const db = await this.db();
       // 표를 직접 읽지 않고 서버 함수가 로그인 토큰으로 내 닉네임만 돌려준다
-      const { data } = await db.rpc("my_profile");
+      const [{ data }, rules] = await Promise.all([db.rpc("my_profile"), db.rpc("guests_ranked")]);
       this.nickname = typeof data === "string" ? data : "";
+      if (typeof rules.data === "boolean") this.guestsRanked = rules.data;
     }
     this.onChange();
   }
@@ -331,6 +335,8 @@ class MockOnline implements Online {
   readonly configured = true;
   nickname: string | null = null;
   guest = false;
+  /** ?rankmock=1&guestsoff 이면 손님 랭킹이 꺼진 서버처럼 */
+  readonly guestsRanked = !new URLSearchParams(location.search).has("guestsoff");
   onChange = (): void => {};
 
   get account(): string | null {
@@ -415,7 +421,7 @@ class MockOnline implements Online {
     const best = this.mine.length ? Math.max(...this.mine.map((m) => m.score)) : -1;
     const rows: { nickname: string; score: number; maxCombo: number; mine: boolean }[] =
       this.others.map(([nickname, score, maxCombo]) => ({ nickname, score, maxCombo, mine: false }));
-    if (this.nickname && best >= 0) rows.push({ nickname: this.nickname, score: best, maxCombo: Math.round(best / 2100), mine: true });
+    if (this.nickname && (this.guestsRanked || !this.guest) && best >= 0) rows.push({ nickname: this.nickname, score: best, maxCombo: Math.round(best / 2100), mine: true });
     rows.sort((a, b) => b.score - a.score);
     return rows.slice(0, 10).map((r, i) => ({ ...r, rank: i + 1, at: new Date() }));
   }
@@ -427,6 +433,7 @@ class MockOnline implements Online {
   async myRank(): Promise<{ rank: number | null; best: number } | null> {
     if (!this.mine.length) return null;
     const best = Math.max(...this.mine.map((m) => m.score));
-    return { rank: this.nickname ? this.others.filter((o) => o[1] > best).length + 1 : null, best };
+    const shown = this.nickname && (this.guestsRanked || !this.guest);
+    return { rank: shown ? this.others.filter((o) => o[1] > best).length + 1 : null, best };
   }
 }

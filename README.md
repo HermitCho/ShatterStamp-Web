@@ -88,7 +88,10 @@ tools/sim-balance.ts, tools/build-font.py, tools/sync-edge.ts
    - 사이트 키(공개)는 `src/game/online-config.ts`의 `TURNSTILE_SITE_KEY`에 넣는다. CSP는 키가 있을 때만 Cloudflare를 연다.
    - 비밀 키는 Supabase → Authentication → Attack Protection → CAPTCHA(Turnstile)에만 넣는다. 저장소·채팅에 두지 않는다.
    - 사이트 키를 넣은 배포가 올라간 **뒤에** Supabase의 CAPTCHA를 켠다(반대로 하면 그 사이 손님 계정을 못 만든다).
-4. 게임이 보내지 못한 판(인터넷 끊김, 창 닫기)은 기기에 맡겨 두고 다음 연결 때 다시 보낸다(판 표 6시간 안, 5번까지).
+4. **손님 랭킹 스위치**: 손님 도배·봇이 문제가 되면 SQL Editor에서 `update public.ranking_settings set guests_ranked = false;`
+   한 줄로 랭킹을 Google 계정 전용으로 바꾼다. 손님 기록은 지워지지 않고 서버에 남아 있다가, 그 손님이 Google로 로그인하면 옮겨져 보인다.
+   게임은 손님에게 「Google에 로그인하면 랭킹에 올라가요」를 보여 준다. 다시 켜려면 `= true`.
+5. 게임이 보내지 못한 판(인터넷 끊김, 창 닫기)은 기기에 맡겨 두고 다음 연결 때 다시 보낸다(판 표 6시간 안, 5번까지).
 
 ### 점수 검증 서버 함수 배포
 

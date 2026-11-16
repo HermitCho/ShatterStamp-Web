@@ -333,6 +333,7 @@ export class Game {
     }
     this.menus.rank.nickname = nick;
     this.menus.rank.guest = this.online.guest;
+    this.menus.rank.guestsRanked = this.online.guestsRanked;
     let afterLogin = false;
     try {
       afterLogin = sessionStorage.getItem("ss.afterLogin") === "1";
@@ -511,6 +512,7 @@ export class Game {
       if (this.run !== run) return;
       this.menus.resultRank = res.ok
         ? res.rank ? t("RESULT_RANK_FMT", res.rank)
+          : this.online.guest && !this.online.guestsRanked ? t("RESULT_RANK_GOOGLE")
           : this.online.nickname === "" ? t("RESULT_RANK_NICK") : t("RESULT_RANK_SAVED")
         : res.reason === "guest" ? t("RESULT_RANK_GUEST")
         : res.reason === "limit" ? t("RESULT_RANK_LIMIT")
@@ -518,7 +520,7 @@ export class Game {
         : res.reason === "outdated" ? t("RESULT_RANK_OUTDATED")
         : res.reason === "off" ? "" : t("RESULT_RANK_PENDING");
       // 손님의 첫 기록: 결과 화면이 뜬 뒤 닉네임을 한 번 묻는다(취소해도 기록은 남아 있다)
-      if (res.ok && res.rank == null && this.online.nickname === "" && !this.askedNick) {
+      if (res.ok && res.rank == null && this.online.nickname === "" && this.online.guestsRanked && !this.askedNick) {
         this.askedNick = true;
         setTimeout(() => {
           if (this.run === run && this.state === "result" && this.online.nickname === "") this.editNickname();

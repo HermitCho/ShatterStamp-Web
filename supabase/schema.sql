@@ -53,6 +53,16 @@ create index if not exists scores_user_score on public.scores (user_id, score de
 create index if not exists scores_score on public.scores (score desc);
 create index if not exists scores_user_time on public.scores (user_id, created_at desc);
 
+-- 랭킹 설정 (한 줄짜리 표). guests_ranked: 손님 계정도 랭킹에 보일지.
+-- 손님 도배·봇이 문제가 되면 SQL Editor에서 한 줄로 끈다(손님 기록은 지워지지 않고, Google로 로그인하면 옮겨져 보인다):
+--   update public.ranking_settings set guests_ranked = false;
+-- 다시 켜기: update public.ranking_settings set guests_ranked = true;
+create table if not exists public.ranking_settings (
+  id boolean primary key default true check (id),
+  guests_ranked boolean not null default true
+);
+insert into public.ranking_settings (id) values (true) on conflict (id) do nothing;
+
 -- 닉네임 규칙: 2~12자, 앞뒤 공백 없음, 보이지 않는 글자·방향 바꾸는 글자·제어 문자 금지
 -- (보이지 않는 글자를 섞으면 남과 똑같아 보이는 닉네임을 만들 수 있다)
 alter table public.profiles drop constraint if exists profiles_nickname_check;
@@ -70,6 +80,7 @@ create unique index if not exists profiles_nickname_lower on public.profiles (lo
 alter table public.profiles enable row level security;
 alter table public.scores enable row level security;
 alter table public.runs enable row level security;
+alter table public.ranking_settings enable row level security;
 
 drop policy if exists "profiles readable" on public.profiles;
 drop policy if exists "own profile insert" on public.profiles;
@@ -77,7 +88,7 @@ drop policy if exists "own profile update" on public.profiles;
 drop policy if exists "scores readable" on public.scores;
 drop policy if exists "own score insert" on public.scores;
 
-revoke all on table public.profiles, public.scores, public.runs from anon, authenticated, public;
+revoke all on table public.profiles, public.scores, public.runs, public.ranking_settings from anon, authenticated, public;
 revoke all on sequence public.scores_id_seq from anon, authenticated, public;
 -- 서버 함수(service_role)는 판 표의 시드를 읽어 판을 다시 돌린다
 grant select on table public.runs to service_role;
@@ -196,16 +207,31 @@ begin
   return query select new_id, new_seed;
 end $$;
 
--- 한 사람의 순위와 최고 점수. 순위는 닉네임이 있는 사람끼리만 센다(닉네임이 없으면 rank 는 null).
+-- 손님도 랭킹에 보이는지 (설정 스위치). 게임도 안내 문구를 고르려고 읽는다.
+create or replace function public.guests_ranked()
+returns boolean
+language sql stable security definer set search_path = '' as $$
+  select coalesce((select r.guests_ranked from public.ranking_settings r where r.id), true);
+$$;
+
+-- 랭킹에 보이는 사람인지: 닉네임이 있고, 손님이면 스위치가 켜져 있어야 한다.
+create or replace function public.on_board(p_user uuid)
+returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.profiles p where p.id = p_user)
+     and (public.guests_ranked() or not coalesce((select u.is_anonymous from auth.users u where u.id = p_user), false));
+$$;
+
+-- 한 사람의 순위와 최고 점수. 순위는 랭킹에 보이는 사람끼리만 센다(보이지 않으면 rank 는 null).
 -- 다른 함수 안에서만 쓴다(밖에서는 못 부른다).
 create or replace function public.rank_of(p_user uuid)
 returns table (rank bigint, best integer)
 language sql stable security definer set search_path = '' as $$
   with me as (select max(s.score) as best from public.scores s where s.user_id = p_user),
-       b as (select s.user_id, max(s.score) as best from public.scores s
-             join public.profiles p on p.id = s.user_id group by s.user_id)
-  select case when exists (select 1 from public.profiles p where p.id = p_user)
-              then (select count(*) from b where b.best > me.best) + 1 end,
+       b as (select x.user_id, x.best
+             from (select s.user_id, max(s.score) as best from public.scores s group by s.user_id) x
+             where public.on_board(x.user_id))
+  select case when public.on_board(p_user) then (select count(*) from b where b.best > me.best) + 1 end,
          me.best
   from me where me.best is not null;
 $$;
@@ -260,6 +286,8 @@ language sql stable security definer set search_path = '' as $$
   select row_number() over (order by b.score desc, b.created_at), p.nickname, b.score, b.max_combo, b.created_at,
          b.user_id = auth.uid()
   from best b join public.profiles p on p.id = b.user_id
+  join auth.users u on u.id = b.user_id
+  where public.guests_ranked() or not u.is_anonymous
   order by b.score desc, b.created_at
   limit least(greatest(coalesce(lim, 10), 1), 50);
 $$;
@@ -349,8 +377,9 @@ end $$;
 revoke all on function public.my_profile(), public.set_nickname(text), public.start_run(),
   public.record_run(uuid, uuid, integer, integer, integer, double precision), public.rank_of(uuid),
   public.merge_guest(uuid, uuid), public.cleanup_guests(), public.nick_blocked(text),
+  public.guests_ranked(), public.on_board(uuid),
   public.leaderboard(integer), public.my_top(), public.my_rank() from public, anon, authenticated;
-grant execute on function public.leaderboard(integer) to anon, authenticated;
+grant execute on function public.leaderboard(integer), public.guests_ranked() to anon, authenticated;
 grant execute on function public.my_profile(), public.set_nickname(text), public.start_run(),
   public.my_top(), public.my_rank() to authenticated;
 -- 점수 넣기는 판을 다시 돌려 확인한 서버 함수만 (브라우저의 로그인 사용자도 못 부른다)

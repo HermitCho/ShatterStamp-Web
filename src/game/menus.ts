@@ -34,6 +34,8 @@ export interface RankView {
   nickname: string | null;
   /** 손님 계정인지 (Google 로그인 전) */
   guest: boolean;
+  /** 손님도 랭킹에 보이는지 (서버 설정) */
+  guestsRanked: boolean;
   all: LeaderRow[];
   mine: MyRow[];
   /** 닉네임이 없으면 rank 는 null */
@@ -146,7 +148,7 @@ export class Menus {
   result: ResultData | null = null;
   /** 결과 화면 랭킹 한 줄 (Game이 등록 결과에 맞춰 바꾼다) */
   resultRank = "";
-  readonly rank: RankView = { mode: "all", status: "off", nickname: null, guest: false, all: [], mine: [], myRank: null };
+  readonly rank: RankView = { mode: "all", status: "off", nickname: null, guest: false, guestsRanked: true, all: [], mine: [], myRank: null };
   readonly settings: Settings;
   private panels: Record<PanelId, Panel>;
   private fade = 0;
@@ -687,7 +689,8 @@ export class Menus {
     if (rv.status !== "off") {
       accentLine(g, 244, 880, 232, rv.myRank ? SKIN.timeText : SKIN.accent);
       if (rv.nickname !== null && rv.myRank && rv.myRank.rank === null) {
-        wrapText(g, t("RANK_NICK_FIRST"), 360, 926, right - left, 24, 34, SKIN.muted, "center");
+        const why = rv.guest && !rv.guestsRanked ? "RANK_GOOGLE_FIRST" : "RANK_NICK_FIRST";
+        wrapText(g, t(why), 360, 926, right - left, 24, 34, SKIN.muted, "center");
       } else if (rv.nickname !== null && rv.myRank && rv.myRank.rank !== null) {
         ink(t("RANK_MY_PLACE"), left, 926, 23, 120, SKIN.muted, "left");
         ink(t("RANK_PLACE_FMT", rv.myRank.rank), 310, 926, 30, 80, SKIN.timeText, "right", true);
