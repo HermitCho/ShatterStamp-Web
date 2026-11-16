@@ -1,9 +1,6 @@
-import { BoardModel } from "../core/board-model.ts";
-import { bestMove } from "../core/bot.ts";
-import { Grade, gradeFor } from "../core/game-rules.ts";
-import { GRADE_KEYS, t } from "./i18n.ts";
+import { BoardModel, type Step } from "../core/board-model.ts";
 import type { Cell } from "../core/shapes.ts";
-import { alpha, font, mix, SKIN } from "./skin.ts";
+import { alpha, mix, SKIN } from "./skin.ts";
 import { ease, Tweens, type Seq } from "./tween.ts";
 
 /** 보드 한 칸(보드 좌표 단위). 화면에서는 BOARD_SCALE 배로 그린다. */
@@ -12,6 +9,11 @@ export const BLOCK = 72;
 /** 파괴가 찍은 칸에서 같은 색을 따라 번지는 속도(한 칸 거리당 초)와 전체 상한 */
 const WAVE_STEP = 0.028;
 const WAVE_MAX = 0.2;
+/** 블록이 다 떨어진 뒤 다음 연쇄가 터지기까지 잠깐 멈추는 시간(무엇이 이어졌는지 보이게) */
+const CHAIN_PAUSE = 0.14;
+/** 연쇄 단계 색: 도장 / 연쇄 1 / 연쇄 2 / 연쇄 3+ (미리보기·글자·점수 조각이 같은 색) */
+export const CHAIN_COLORS = ["#40f2ff", "#ffc733", "#ff8a3d", "#ff40d9"];
+export const chainColor = (chains: number): string => CHAIN_COLORS[Math.min(chains, CHAIN_COLORS.length - 1)];
 
 class BlockEnt {
   color: number;
@@ -20,7 +22,10 @@ class BlockEnt {
   sx = 1;
   sy = 1;
   white = 0;
+  bomb = false;
   seq: Seq | null = null;
+  /** seq가 끝나는 시각(이번 찍기 연출 기준). 단계마다 이 뒤에 이어 붙인다. */
+  planT = 0;
 
   constructor(color: number, x: number, y: number) {
     this.color = color;
@@ -33,22 +38,50 @@ export interface Broken {
   x: number;
   y: number;
   color: number;
+  /** 찍은 순간부터 이 블록이 터지기까지(초) */
   delay: number;
 }
 
-export interface BreakEvent {
+/** 한 단계(도장 또는 연쇄 하나)의 연출 정보. 화면 좌표. */
+export interface StepEvent {
+  chain: number;
   count: number;
   broken: Broken[];
-  /** 화면 좌표 */
+  /** 터진 폭탄 자리와 시각 */
+  bombs: { x: number; y: number; delay: number }[];
+  /** 이 단계가 터지기 시작하는 시각 */
+  at: number;
+  /** 글자·점수 조각을 띄울 자리(터지는 칸들의 가운데) */
+  cx: number;
+  cy: number;
+}
+
+export interface BreakEvent {
+  /** 전체 부순 칸 수 */
+  count: number;
+  counts: number[];
+  bombCount: number;
+  steps: StepEvent[];
+  /** 찍은 칸(화면 좌표) */
   ax: number;
   ay: number;
+  /** 첫 단계 번짐이 끝나는 시각 */
   waveTime: number;
+  /** 마지막 블록이 자리 잡기까지(초). 그동안 다음 찍기를 막는다. */
+  duration: number;
+  /** 새로 생긴 폭탄(화면 좌표). 연출이 끝날 때 나타난다. */
+  bomb: { x: number; y: number } | null;
 }
 
 export interface Preview {
   stamp: Cell[];
+  /** 도장 단계에서 부서질 칸(지금 보드 위치) */
   all: Cell[];
-  grade: Grade;
+  counts: number[];
+  bombs: number;
+  /** 피버 배율까지 넣은 예상 점수 */
+  points: number;
+  makesBomb: boolean;
 }
 
 export class BoardView {
@@ -61,8 +94,8 @@ export class BoardView {
   nextOffsets: Cell[] = [];
   anchor: Cell | null = null;
   preview: Preview | null = null;
-  /** 지금 모양으로 가능한 최대 파괴 수(판정 기준) */
-  bestN = 0;
+  /** 단계별 칸 수 → 단계별 점수(게임 규칙이 정한다: 연쇄·피버 배율) */
+  scorer: (counts: number[]) => number[] = (c) => c;
   fever = false;
   /** 0~1: 배경 음악 박자(박 직후 1에서 빠르게 줄어든다). 판 테두리가 숨 쉬듯 밝아진다. */
   beat = 0;
@@ -70,12 +103,15 @@ export class BoardView {
   feverMix = 0;
   /** 미리보기 표시가 피해야 할 자리(화면 좌표, 떠 있는 점수 조각) */
   avoid: { x: number; y: number; w: number; h: number }[] = [];
+  /** 연출이 끝나기까지 남은 시간. 그동안은 미리보기를 숨긴다(보드는 이미 결과 상태라서). */
+  busy = 0;
   /** 판 바깥으로 퍼지는 테두리 빛 고리 */
   private frames: { t: number; max: number; grow: number; color: string }[] = [];
   private blocks: (BlockEnt | null)[] = [];
   private dying: BlockEnt[] = [];
   private tweens = new Tweens();
   private feverT = 0;
+  private clock = 0;
 
   constructor(ox: number, oy: number, scale: number) {
     this.ox = ox;
@@ -96,9 +132,11 @@ export class BoardView {
     this.tweens.clear();
     this.dying = [];
     this.blocks = [];
+    this.busy = 0;
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
         const b = new BlockEnt(this.model.get(x, y), (x + 0.5) * CELL, (y + 0.5) * CELL);
+        b.bomb = model.isBomb(x, y);
         if (animate) {
           b.sx = b.sy = 0;
           b.seq = this.tweens.add().wait(0.025 * (x + y)).to(0.25, (k) => (b.sx = b.sy = k), ease.outBack);
@@ -132,7 +170,6 @@ export class BoardView {
 
   setPiece(cells: Cell[]): void {
     this.offsets = cells;
-    this.bestN = cells.length > 0 ? bestMove(this.model, cells).count : 0;
     this.refreshPreview();
   }
 
@@ -142,78 +179,188 @@ export class BoardView {
     this.refreshPreview();
   }
 
+  /** 미리보기: 보드 복사본에 실제로 찍어 본다(연쇄·폭탄까지). 난수도 복사하므로 결과가 실제와 같다. */
   refreshPreview(): void {
     if (!this.anchor || this.offsets.length === 0) {
       this.preview = null;
       return;
     }
-    const info = this.model.computeBreak(this.anchor.x, this.anchor.y, this.offsets);
-    this.preview = { ...info, grade: gradeFor(info.all.length, this.bestN) };
+    const { x, y } = this.anchor;
+    const info = this.model.computeBreak(x, y, this.offsets);
+    const res = info.stamp.length > 0 ? this.model.clone().resolve(x, y, this.offsets, this.nextOffsets) : null;
+    const counts = res ? res.steps.map((st) => st.broken.length) : [];
+    this.preview = {
+      stamp: info.stamp,
+      all: res ? res.steps[0].broken.map((p) => ({ x: p.x, y: p.y })) : [],
+      counts,
+      bombs: res ? res.steps.reduce((n, st) => n + st.bombs.length, 0) : 0,
+      points: this.scorer(counts).reduce((n, v) => n + v, 0),
+      makesBomb: !!res?.bomb,
+    };
   }
 
-  /** 찍는다. 찍을 블록이 없으면 null. */
+  /** 찍는다(연쇄까지 끝까지). 찍을 블록이 없으면 null. 보드는 바로 결과 상태가 되고, 화면은 단계별로 따라간다. */
   placeAt(cx: number, cy: number): BreakEvent | null {
-    const info = this.model.computeBreak(cx, cy, this.offsets);
-    if (info.stamp.length === 0) return null;
+    const res = this.model.resolve(cx, cy, this.offsets, this.nextOffsets);
+    if (!res) return null;
     const { cols } = this.model;
-    // 찍은 칸(거리 0)에서 같은 색 이웃을 따라 번지며 차례로 터진다.
-    const depth = waveDepth(info.stamp, info.all, cols);
+    // 지난 연출이 남아 있으면 끝 상태로 맞추고 새로 짠다
+    this.blocks.forEach((b, i) => {
+      if (!b) return;
+      b.seq?.kill();
+      b.seq = null;
+      b.planT = 0;
+      b.x = ((i % cols) + 0.5) * CELL;
+      b.y = (Math.floor(i / cols) + 0.5) * CELL;
+      b.sx = b.sy = 1;
+      b.white = 0;
+    });
+    const steps: StepEvent[] = [];
+    let at = 0, waveTime = 0;
+    for (const st of res.steps) {
+      const ev = this.playStep(st, at);
+      steps.push(ev.event);
+      if (st.chain === 0) waveTime = ev.waveEnd;
+      at = ev.settle + CHAIN_PAUSE;
+    }
+    const duration = at - CHAIN_PAUSE;
+    let bomb: BreakEvent["bomb"] = null;
+    if (res.bomb) {
+      const b = this.blocks[res.bomb.y * cols + res.bomb.x]!;
+      const [bx, by] = this.toScreen(res.bomb.x, res.bomb.y);
+      bomb = { x: bx, y: by };
+      this.tweens.add().wait(duration).call(() => (b.bomb = true));
+    }
+    this.busy = duration;
+    this.preview = null;
+    const [ax, ay] = this.toScreen(cx, cy);
+    const counts = res.steps.map((st) => st.broken.length);
+    return {
+      count: counts.reduce((n, v) => n + v, 0), counts, bombCount: steps.reduce((n, st) => n + st.bombs.length, 0),
+      steps, ax, ay, waveTime, duration, bomb,
+    };
+  }
+
+  /** 한 단계를 at초부터 연출한다: 시작 칸에서 번지며 터짐 → 위 블록 낙하 → 새 블록 낙하 */
+  private playStep(st: Step, at: number): { event: StepEvent; waveEnd: number; settle: number } {
+    const { cols } = this.model;
+    const depth = waveDepth(st.seeds, st.broken, cols);
     let maxD = 0;
     for (const d of depth.values()) maxD = Math.max(maxD, d);
     const step = Math.min(WAVE_STEP, WAVE_MAX / Math.max(1, maxD));
     const broken: Broken[] = [];
-    for (const p of info.all) {
+    let sumX = 0, sumY = 0;
+    for (const p of st.broken) {
       const i = p.y * cols + p.x;
       const b = this.blocks[i]!;
-      const delay = (depth.get(i) ?? 0) * step;
+      const delay = at + (depth.get(i) ?? 0) * step;
       const [sx, sy] = this.toScreen(p.x, p.y);
-      broken.push({ x: sx, y: sy, color: b.color, delay });
+      sumX += sx;
+      sumY += sy;
+      broken.push({ x: sx, y: sy, color: p.color, delay });
       this.pop(b, delay);
       this.blocks[i] = null;
     }
-    const waveTime = maxD * step;
-
-    const res = this.model.applyBreak(info.all, this.nextOffsets);
-    const moving = res.moves.map((m) => {
+    const bombs = st.bombs.map((p) => {
+      const [x, y] = this.toScreen(p.x, p.y);
+      return { x, y, delay: at + (depth.get(p.y * cols + p.x) ?? 0) * step };
+    });
+    const waveEnd = at + maxD * step;
+    let settle = waveEnd + 0.1;
+    const moving = st.moves.map((m) => {
       const b = this.blocks[m.from.y * cols + m.from.x]!;
       this.blocks[m.from.y * cols + m.from.x] = null;
       return { b, m };
     });
     for (const { b, m } of moving) {
       this.blocks[m.to.y * cols + m.to.x] = b;
-      this.drop(b, m.to.y, m.to.y - m.from.y, waveTime);
+      settle = Math.max(settle, this.drop(b, waveEnd, m.from.y, m.to.y));
     }
-    for (const s of res.spawns) {
-      const b = new BlockEnt(s.color, (s.to.x + 0.5) * CELL, (s.fromY + 0.5) * CELL);
-      this.blocks[s.to.y * cols + s.to.x] = b;
-      this.drop(b, s.to.y, s.to.y - s.fromY, waveTime);
+    for (const sp of st.spawns) {
+      const b = new BlockEnt(sp.color, (sp.to.x + 0.5) * CELL, (sp.fromY + 0.5) * CELL);
+      this.blocks[sp.to.y * cols + sp.to.x] = b;
+      settle = Math.max(settle, this.drop(b, waveEnd, sp.fromY, sp.to.y));
     }
-    const [ax, ay] = this.toScreen(cx, cy);
-    return { count: info.all.length, broken, ax, ay, waveTime };
+    const n = Math.max(1, st.broken.length);
+    return {
+      event: { chain: st.chain, count: st.broken.length, broken, bombs, at, cx: sumX / n, cy: sumY / n },
+      waveEnd,
+      settle,
+    };
   }
 
-  private pop(b: BlockEnt, delay: number): void {
-    b.seq?.kill();
+  /**
+   * 판이 끝날 때: 판 가운데에서 충격파가 퍼지며, 가까운 블록부터 바깥쪽으로 살짝 밀렸다가 부서진다.
+   * 보드 모델은 바꾸지 않는다(다음 판에 새 보드를 깐다). 블록마다 부서지는 시각과 충격파 중심(화면 좌표)을 돌려준다.
+   */
+  shockAll(at: number): { pieces: Broken[]; last: number; cx: number; cy: number } {
+    const { cols, rows } = this.model;
+    const pieces: Broken[] = [];
+    this.busy = Number.POSITIVE_INFINITY;
+    this.preview = null;
+    const fx = (cols - 1) / 2, fy = (rows - 1) / 2;
+    let last = at;
+    this.blocks.forEach((b, i) => {
+      if (!b) return;
+      b.seq?.kill();
+      b.seq = null;
+      b.planT = 0;
+      const x = i % cols, y = Math.floor(i / cols);
+      b.x = (x + 0.5) * CELL;
+      b.y = (y + 0.5) * CELL;
+      b.sx = b.sy = 1;
+      this.blocks[i] = null;
+      // 멈춘 순간 하얗게 굳었다가 살짝 남는다
+      this.tweens.add().to(0.1, (k) => (b.white = 0.7 * k)).to(0.3, (k) => (b.white = 0.7 - 0.5 * k));
+      const dx = x - fx, dy = y - fy, d = Math.hypot(dx, dy);
+      const delay = at + d * 0.07;
+      const ox = d ? (dx / d) * 18 : 0, oy = d ? (dy / d) * 18 : 0, x0 = b.x, y0 = b.y;
+      this.dying.push(b);
+      this.seqAt(b, delay)
+        .to(0.05, (k) => {
+          b.x = x0 + ox * k;
+          b.y = y0 + oy * k;
+          b.white = 0.2 + 0.8 * k;
+          b.sx = b.sy = 1 + 0.2 * k;
+        })
+        .to(0.07, (k) => (b.sx = b.sy = 1.2 * (1 - k)), ease.inQuad)
+        .call(() => (this.dying = this.dying.filter((v) => v !== b)));
+      const [sx, sy] = this.toScreen(x, y);
+      pieces.push({ x: sx + ox * this.scale, y: sy + oy * this.scale, color: b.color, delay: delay + 0.05 });
+      last = Math.max(last, delay + 0.05);
+    });
+    const [cx, cy] = this.toScreen(fx, fy);
+    return { pieces, last, cx, cy };
+  }
+
+  /** b의 연출 줄에서 at초 자리를 연다(앞 단계 연출 뒤에 이어 붙인다). */
+  private seqAt(b: BlockEnt, at: number): Seq {
+    if (!b.seq || b.seq.dead) {
+      b.seq = this.tweens.add();
+      b.planT = 0;
+    }
+    b.seq.wait(at - b.planT);
+    return b.seq;
+  }
+
+  private pop(b: BlockEnt, at: number): void {
     this.dying.push(b);
-    b.seq = this.tweens
-      .add()
-      .wait(delay)
+    this.seqAt(b, at)
       .to(0.03, (k) => {
         b.white = k;
         b.sx = b.sy = 1 + 0.18 * k;
       })
       .to(0.06, (k) => (b.sx = b.sy = 1.18 * (1 - k)), ease.inQuad)
       .call(() => (this.dying = this.dying.filter((d) => d !== b)));
+    b.planT = at + 0.09;
   }
 
-  private drop(b: BlockEnt, toRow: number, dist: number, delay: number): void {
-    b.seq?.kill();
-    b.sx = b.sy = 1;
-    const y0 = b.y, y1 = (toRow + 0.5) * CELL;
-    b.seq = this.tweens
-      .add()
-      .wait(delay) // 위 블록은 번지는 파괴가 끝난 뒤에 떨어진다
-      .to(0.06 + 0.017 * dist, (k) => (b.y = y0 + (y1 - y0) * k), ease.inQuad)
+  /** fromRow → toRow 낙하를 at초에 시작한다. 자리 잡는 시각을 돌려준다. */
+  private drop(b: BlockEnt, at: number, fromRow: number, toRow: number): number {
+    const y0 = (fromRow + 0.5) * CELL, y1 = (toRow + 0.5) * CELL;
+    const fall = 0.06 + 0.017 * (toRow - fromRow);
+    this.seqAt(b, at)
+      .to(fall, (k) => (b.y = y0 + (y1 - y0) * k), ease.inQuad) // 위 블록은 번지는 파괴가 끝난 뒤에 떨어진다
       .to(0.04, (k) => {
         b.sx = 1 + 0.1 * k;
         b.sy = 1 - 0.12 * k;
@@ -222,10 +369,17 @@ export class BoardView {
         b.sx = 1.1 - 0.1 * k;
         b.sy = 0.88 + 0.12 * k;
       }, ease.outBack);
+    b.planT = at + fall + 0.12;
+    return at + fall + 0.04;
   }
 
   update(dt: number): void {
     this.tweens.update(dt);
+    this.clock += dt;
+    if (this.busy > 0) {
+      this.busy = Math.max(0, this.busy - dt);
+      if (this.busy === 0) this.refreshPreview();
+    }
     if (this.fever) this.feverT += dt;
     for (const f of this.frames) f.t += dt;
     this.frames = this.frames.filter((f) => f.t < f.max);
@@ -284,32 +438,49 @@ export class BoardView {
     g.beginPath();
     g.rect(-12, -12, w + 24, h + 24);
     g.clip();
-    for (const b of this.blocks) if (b) drawBlock(g, b);
-    for (const b of this.dying) drawBlock(g, b);
+    const pulse = 0.5 + 0.5 * Math.sin(this.clock * 6);
+    for (const b of this.blocks) if (b) drawBlock(g, b, pulse);
+    for (const b of this.dying) drawBlock(g, b, pulse);
     g.restore();
     this.drawPreview(g);
     g.restore();
   }
 
-  /** 미리보기: 판정 색 하나로 통일. 부서질 영역 바깥 윤곽 + "+N 판정" 알약, 찍는 칸은 얇은 흰 선. */
+  /**
+   * 미리보기: 부서질 영역은 블록이 제 색으로 은은히 밝아지고(숨 쉬듯) 얇은 회백색 윤곽, 찍는 칸(도장)은 굵고 밝은 흰 칸.
+   * 점수·연쇄 표시는 없다(판정이 없어져 눈에 보이는 대로 부수면 된다).
+   */
+  /** 함께 터질 칸의 블록을 제 색으로 덧그려 은은히 밝힌다(약 1.9초 주기로 숨 쉬듯). 게임 방법 그림도 같이 쓴다. */
+  glowCells(g: CanvasRenderingContext2D, cells: readonly Cell[]): void {
+    const cols = this.model.cols;
+    g.save();
+    g.globalCompositeOperation = "lighter";
+    g.globalAlpha = 0.32 + 0.12 * Math.sin(this.clock * 3.3);
+    for (const p of cells) {
+      const blk = this.blocks[p.y * cols + p.x];
+      if (blk) drawBlock(g, blk, 0);
+    }
+    g.restore();
+  }
+
   private drawPreview(g: CanvasRenderingContext2D): void {
     const pv = this.preview;
-    if (!pv || !this.anchor) return;
-    const col = SKIN.grades[pv.grade];
+    if (!pv || !this.anchor || this.busy > 0) return;
     const { cols, rows } = this.model;
     const inside = new Set(pv.all.map((p) => p.y * cols + p.x));
     const has = (x: number, y: number) => x >= 0 && y >= 0 && x < cols && y < rows && inside.has(y * cols + x);
 
     g.fillStyle = SKIN.dim;
     for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) if (!inside.has(y * cols + x)) g.fillRect(x * CELL, y * CELL, CELL, CELL);
-    g.fillStyle = alpha(col, 0.14);
-    for (const p of pv.all) g.fillRect(p.x * CELL, p.y * CELL, CELL, CELL);
-
-    g.lineCap = "square";
-    for (const [w, c] of [[11, "rgba(0,0,8,0.85)"], [5, col]] as const) {
+    this.glowCells(g, pv.all);
+    const outline = (path: () => void, w: number, c: string) => {
       g.lineWidth = w;
       g.strokeStyle = c;
       g.beginPath();
+      path();
+      g.stroke();
+    };
+    const edges = () => {
       for (const p of pv.all) {
         const x = p.x * CELL, y = p.y * CELL;
         if (!has(p.x, p.y - 1)) seg(g, x, y, x + CELL, y);
@@ -317,74 +488,33 @@ export class BoardView {
         if (!has(p.x - 1, p.y)) seg(g, x, y, x, y + CELL);
         if (!has(p.x + 1, p.y)) seg(g, x + CELL, y, x + CELL, y + CELL);
       }
-      g.stroke();
-    }
-    g.lineWidth = 3;
+    };
+    g.lineCap = "square";
+    outline(edges, 8, "rgba(0,0,8,0.8)");
+    outline(edges, 3, "rgba(220,226,240,0.85)");
+    // 찍는 칸: 흰 빛 칸 + 굵은 흰 테두리(보드 밖 칸은 흐린 점선)
     for (const o of this.offsets) {
       const x = this.anchor.x + o.x, y = this.anchor.y + o.y;
-      g.strokeStyle = this.model.inBounds(x, y) ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.2)";
-      g.strokeRect(x * CELL + 12, y * CELL + 12, CELL - 24, CELL - 24);
+      const inBoard = this.model.inBounds(x, y);
+      g.save();
+      if (inBoard) {
+        g.fillStyle = "rgba(255,255,255,0.22)";
+        roundRect(g, x * CELL + 5, y * CELL + 5, CELL - 10, CELL - 10, 12);
+        g.fill();
+        g.shadowColor = "rgba(255,255,255,0.9)";
+        g.shadowBlur = 14;
+        g.lineWidth = 6;
+        g.strokeStyle = "#ffffff";
+        g.stroke();
+      } else {
+        g.setLineDash([8, 8]);
+        g.lineWidth = 3;
+        g.strokeStyle = "rgba(255,255,255,0.3)";
+        roundRect(g, x * CELL + 8, y * CELL + 8, CELL - 16, CELL - 16, 10);
+        g.stroke();
+      }
+      g.restore();
     }
-    if (pv.all.length > 0) this.drawPill(g, pv, col);
-  }
-
-  private drawPill(g: CanvasRenderingContext2D, pv: Preview, col: string): void {
-    // 깨질 블록 수(점수 조각 「+832」와 헷갈리지 않게 「13칸」)
-    const countText = t("CELLS_FMT", pv.all.length);
-    const gradeText = t(GRADE_KEYS[pv.grade]);
-    g.font = font(34);
-    const cw = g.measureText(countText).width;
-    g.font = font(28);
-    const gw = g.measureText(gradeText).width;
-    const w = cw + gw + 52, h = 54;
-    let top = 99, bottom = -1, sumX = 0;
-    for (const p of pv.all) {
-      top = Math.min(top, p.y);
-      bottom = Math.max(bottom, p.y);
-      sumX += p.x;
-    }
-    let cx = (sumX / pv.all.length + 0.5) * CELL;
-    cx = Math.min(Math.max(cx, w / 2), this.width - w / 2);
-    let y = top * CELL - h - 8;
-    if (top === 0) {
-      y = (bottom + 1) * CELL + 8;
-      if (bottom === this.model.rows - 1) y = this.anchor!.y * CELL - h / 2;
-    }
-    // 떠 있는 점수 조각과 겹치면 모양 아래(또는 위)로 옮기고, 둘 다 막히면 흐리게
-    const hits = (py: number) => {
-      const sx = this.ox + (cx - w / 2) * this.scale, sy = this.oy + py * this.scale, sw = w * this.scale, sh = h * this.scale;
-      return this.avoid.some((r) => sx < r.x + r.w && r.x < sx + sw && sy < r.y + r.h && r.y < sy + sh);
-    };
-    let dim = 1;
-    if (hits(y)) {
-      const below = (bottom + 1) * CELL + 8, above = top * CELL - h - 8;
-      const alt = [below, above].find((v) => v !== y && v >= -h / 2 && v + h <= this.model.rows * CELL + h / 2 && !hits(v));
-      if (alt !== undefined) y = alt;
-      else dim = 0.3;
-    }
-    g.save();
-    g.globalAlpha *= dim;
-    if (pv.grade === Grade.PERFECT) {
-      g.shadowColor = alpha(col, 0.7);
-      g.shadowBlur = 18;
-    }
-    roundRect(g, cx - w / 2, y, w, h, 27);
-    g.fillStyle = "rgba(5,3,15,0.94)";
-    g.fill();
-    g.shadowBlur = 0;
-    g.lineWidth = 4;
-    g.strokeStyle = col;
-    g.stroke();
-    g.textBaseline = "alphabetic";
-    g.textAlign = "left";
-    g.font = font(34);
-    g.fillStyle = "#fff";
-    const x0 = cx - w / 2 + 20;
-    g.fillText(countText, x0, y + 39);
-    g.font = font(28);
-    g.fillStyle = col;
-    g.fillText(gradeText, x0 + cw + 12, y + 37);
-    g.restore();
   }
 }
 
@@ -395,6 +525,7 @@ function seg(g: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1
 
 /** 찍은 칸들에서 시작하는 너비 우선 거리(부서질 칸끼리 상하좌우로만 이어짐). 키 = y*cols+x */
 function waveDepth(stamp: Cell[], all: Cell[], cols: number): Map<number, number> {
+  // 폭탄 3×3 칸은 같은 색이 아니어도 이웃이라 번짐에 함께 들어간다
   const inside = new Set(all.map((p) => p.y * cols + p.x));
   const depth = new Map<number, number>();
   const q: number[] = [];
@@ -485,7 +616,30 @@ function symbol(g: CanvasRenderingContext2D, color: number): void {
   g.fill();
 }
 
-function drawBlock(g: CanvasRenderingContext2D, b: BlockEnt): void {
+/** 폭탄 표시: 흰 빛 고리 + 네 방향 불꽃. pulse 0~1로 숨 쉰다. */
+export function drawBombMark(g: CanvasRenderingContext2D, x: number, y: number, r: number, pulse: number): void {
+  g.save();
+  g.translate(x, y);
+  g.shadowColor = "rgba(255,255,255,0.9)";
+  g.shadowBlur = 6 + 10 * pulse;
+  g.strokeStyle = "#ffffff";
+  g.lineWidth = r * 0.22;
+  g.beginPath();
+  g.arc(0, 0, r, 0, Math.PI * 2);
+  g.stroke();
+  g.fillStyle = "#ffffff";
+  for (let i = 0; i < 4; i++) {
+    g.rotate(Math.PI / 2);
+    g.beginPath();
+    g.moveTo(-r * 0.2, -r * 1.1);
+    g.lineTo(0, -r * (1.55 + 0.2 * pulse));
+    g.lineTo(r * 0.2, -r * 1.1);
+    g.fill();
+  }
+  g.restore();
+}
+
+function drawBlock(g: CanvasRenderingContext2D, b: BlockEnt, pulse: number): void {
   if (b.sx <= 0.001) return;
   const spr = blockSprite(b.color);
   const s = BLOCK + PAD * 2;
@@ -493,6 +647,7 @@ function drawBlock(g: CanvasRenderingContext2D, b: BlockEnt): void {
   g.translate(b.x, b.y);
   g.scale(b.sx, b.sy);
   g.drawImage(spr, -s / 2, -s / 2, s, s);
+  if (b.bomb) drawBombMark(g, 0, 0, 22, pulse);
   if (b.white > 0) {
     g.globalAlpha = b.white * 0.8;
     g.fillStyle = "#fff";

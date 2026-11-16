@@ -1,7 +1,7 @@
 # Shatter Stamp (Web)
 
-60초 콤보 퍼즐 게임 **Shatter Stamp**의 웹(TypeScript + Canvas 2D) 버전.
-Godot 버전(`D:\Godot\ShatterStamp`, https://github.com/HermitCho/ShatterStamp)과 규칙·수치가 같고,
+60초 연쇄 퍼즐 게임 **Shatter Stamp**의 웹(TypeScript + Canvas 2D) 버전.
+Godot 버전(`D:\Godot\ShatterStamp`, https://github.com/HermitCho/ShatterStamp)에서 출발했고(지금은 판정 대신 연쇄·폭탄 규칙으로 바뀜),
 엔진 없이 만들어 첫 로딩이 가볍다 (JS 약 26KB gzip + 한글 폰트 서브셋 약 140KB, Godot 웹 빌드는 약 10MB).
 
 **플레이:** https://hermitcho.github.io/ShatterStamp-Web/
@@ -25,23 +25,23 @@ npm run sim        # 봇 밸런스 시뮬레이션 (-- --runs=30 --base=1000 --g
 
 ```
 src/core/          화면과 분리된 순수 로직 (테스트·시뮬레이션이 같은 코드를 씀)
-  board-model.ts   보드: 연결 블록 탐색, 낙하, 보충, 보충 조정(다음 모양 최대치를 15개 근처로)
-  game-rules.ts    판정(PERFECT/GREAT/GOOD/MISS), 점수, 콤보, 시간 보너스
-  bot.ts           최대 파괴 자리 계산(덩어리 번호 방식)
+  board-model.ts   보드: 연결 블록 탐색, 낙하, 보충, 보충 조정, 연쇄(낙하 뒤 같은 색 5칸 이상), 폭탄(3×3)
+  game-rules.ts    점수(연쇄 단계마다 ×2, ×3 …), 피버 게이지(×2), 시간 보너스
+  bot.ts           자리마다 연쇄까지 굴려 본 점수 순위(튜토리얼·봇·서버 검증)
   shapes.ts        모양 16종 (홀수 크기, 정가운데 = 마우스 칸)
   shape-queue.ts   주머니 섞기 방식 모양 큐
   rng.ts           시드 난수
   replay.ts        판 다시 돌리기: 서버 시드로 보드를 만들고, 찍기·홀드 기록으로 점수를 다시 계산(랭킹 검증)
 src/game/          화면
-  game.ts          게임 흐름, HUD, 오른쪽 모양 줄, 판정 글자, 타격감
+  game.ts          게임 흐름, HUD, 오른쪽 모양 줄, 연쇄 글자, 판 끝 충격파, 타격감
   menus.ts         타이틀 / 게임 방법 / 설정 / 일시정지 / 결과 / 랭킹 (캔버스 버튼·슬라이더, 키보드 이동)
   stamp-menu.ts    메뉴 모양: 옮겨 다니는 도장 선택 표시, 글자, 슬라이더
   online.ts        온라인 랭킹(Supabase): Google 로그인, 닉네임, 점수 등록, TOP 10 (?rankmock=1 가짜 데이터)
   online-config.ts Supabase 주소·공개 키
   nick-input.ts    닉네임 입력 창(HTML)
-  howto.ts         게임 방법 그림 카드
+  howto.ts         게임 방법 세 장(실제 규칙으로 움직이는 그림)
   draw.ts          글자 그리기 도우미
-  board-view.ts    블록 그림·애니메이션, 번지는 파괴, 판정 색 미리보기
+  board-view.ts    블록 그림·애니메이션, 번지는 파괴·연쇄 단계 연출, 미리보기(부서질 블록이 제 색으로 빛남)
   fx.ts            파편·섬광·충격파·별
   audio.ts         Web Audio 효과음 합성
   music.ts         배경 음악 합성(타이틀 / 게임 / 피버 층)
@@ -117,7 +117,7 @@ GitHub 저장소 › Settings › Secrets and variables › Actions › `SUPABAS
   `record_run`·`merge_guest`는 서버 함수만 부를 수 있다.
   누구인지는 함수가 로그인 토큰(`auth.uid()`)에서 꺼낸다. 랭킹에는 닉네임·점수만 나가고 내부 계정 번호는 나가지 않는다.
 - **서버 검사:** 닉네임 2~12자·보이지 않는 글자 금지·대소문자 무시 중복 금지·운영자 사칭 금지·부적절한 말 금지(욕설·성적인 말·혐오·차별·마약·자해 등, `nick_blocked`. 띄어쓰기·숫자·바꿔 쓴 글자도 걸림)·30초에 한 번 변경,
-  점수·콤보 범위, 하루 300번 등록, 판 표는 2초에 한 번·하루 1000번.
+  점수·최대 연쇄 범위, 하루 300번 등록, 판 표는 2초에 한 번·하루 1000번.
 - **확인:** `schema.sql` 실행 뒤 `supabase/security-test.sql`을 SQL Editor에서 실행하면 방문자·가짜 사용자 3명·손님 1명으로 공격을 흉내 내고
   결과를 표로 보여 준다(시험 데이터는 되돌린다). 모든 `pass`가 true여야 한다.
 - **사이트:** 배포 빌드에 콘텐츠 보안 정책(CSP)을 넣어 우리 파일 밖의 스크립트 실행과 Supabase 밖으로의 통신을 막는다(`vite.config.ts`).

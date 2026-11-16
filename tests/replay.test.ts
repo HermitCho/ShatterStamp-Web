@@ -1,7 +1,7 @@
 // 리플레이 검증 테스트: 게임처럼 프레임 단위로 시간을 흘리며 한 판을 두고, 서버 계산(simulateRun)이 같은 점수를 내는지 본다.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { bestMove } from "../src/core/bot.ts";
+import { planMoves } from "../src/core/bot.ts";
 import { GAME_TIME, GameRules, STAMP_COOLDOWN } from "../src/core/game-rules.ts";
 import { newBoard, newQueue, REPLAY_VERSION, simulateRun, type Replay, type ReplayEvent } from "../src/core/replay.ts";
 import { Rng } from "../src/core/rng.ts";
@@ -30,20 +30,19 @@ function playLikeClient(seed: number, opts: { tutorial?: boolean; botSeed?: numb
     holdUsed = true;
     log.push(["h", t]);
   };
+  const best = () => planMoves(board, current.cells, queue.peek(1)[0].cells)[0];
   const place = (x: number, y: number) => {
-    const bestN = bestMove(board, current.cells).count;
-    const info = board.computeBreak(x, y, current.cells);
-    if (info.stamp.length === 0) return null;
-    board.applyBreak(info.all, queue.peek(1)[0].cells);
+    const res = board.resolve(x, y, current.cells, queue.peek(1)[0].cells);
+    if (!res) return null;
     current = queue.pop();
     holdUsed = false;
-    return { n: info.all.length, bestN };
+    return { counts: res.steps.map((s) => s.broken.length), bombs: res.steps.reduce((a, s) => a + s.bombs.length, 0) };
   };
 
   if (opts.tutorial) {
     tutorial = [];
     for (let i = 0; i < 3; i++) {
-      const mv = bestMove(board, current.cells);
+      const mv = best();
       place(mv.x, mv.y);
       tutorial.push(["s", 0, mv.x, mv.y]);
     }
@@ -70,15 +69,16 @@ function playLikeClient(seed: number, opts: { tutorial?: boolean; botSeed?: numb
     if (stampLock > 0) continue;
     const mv = rnd.next() < (opts.sloppy ?? 0.3)
       ? { x: rnd.int(0, board.cols - 1), y: rnd.int(0, board.rows - 1) }
-      : bestMove(board, current.cells);
+      : best();
     const r = place(mv.x, mv.y);
     if (!r) continue;
     events.push(["s", rules.elapsed, mv.x, mv.y]);
-    rules.registerBreak(r.n, r.bestN);
-    stampLock = STAMP_COOLDOWN;
+    rules.registerStamp(r.counts, r.bombs);
+    // 게임은 연쇄 연출이 끝날 때까지 더 오래 막는다(서버는 최소 쿨다운만 본다)
+    stampLock = STAMP_COOLDOWN + (rnd.next() < 0.5 ? 0 : 0.4 * (r.counts.length - 1));
   }
   const replay: Replay = { v: REPLAY_VERSION, tutorial, events };
-  return { replay, score: rules.score, maxCombo: rules.maxCombo, biggest: rules.biggest, elapsed: rules.elapsed };
+  return { replay, score: rules.score, maxCombo: rules.maxChain, biggest: rules.biggest, elapsed: rules.elapsed };
 }
 
 /** JSON으로 보내고 받은 것처럼 만든다 */
@@ -117,8 +117,9 @@ test("tampered replays are rejected", () => {
   // 쿨다운(0.35초)보다 빨리 찍기: 두 번째 찍기를 첫 번째 바로 뒤로 당긴다
   const s = stamps();
   bad((r) => {
+    const i0 = r.events.findIndex((e) => e[0] === "s" && e[1] === s[0][1]);
     const i = r.events.findIndex((e) => e[0] === "s" && e[1] === s[1][1]);
-    r.events[i][1] = s[0][1] + 0.1;
+    for (let k = i0 + 1; k <= i; k++) r.events[k][1] = s[0][1] + 0.1; // 사이의 홀드도 함께 당긴다
   }, "cooldown");
   // 시간이 끝난 뒤에 더 찍기
   bad((r) => r.events.push(["s", game.elapsed + 5, 0, 0]), "late");

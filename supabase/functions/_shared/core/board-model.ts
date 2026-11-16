@@ -30,6 +30,39 @@ export interface Spawn {
   fromY: number;
 }
 
+/** 떨어진 뒤 같은 색이 이만큼 이어지면 저절로 터진다(연쇄) */
+export const CHAIN_MIN = 5;
+/** 한 번 찍어 연쇄까지 합쳐 이만큼 부수면 찍은 자리에 폭탄이 생긴다 */
+export const BOMB_MIN = 40;
+/** 폭탄은 주변 3×3을 함께 터뜨린다 */
+export const BOMB_RADIUS = 1;
+/** 무한 연쇄 방지 */
+export const MAX_CHAIN = 30;
+
+export interface BrokenCell {
+  x: number;
+  y: number;
+  color: number;
+}
+
+/** 한 단계: 도장(chain 0) 또는 연쇄(chain 1, 2, …) 하나가 터지고 블록이 떨어지기까지 */
+export interface Step {
+  chain: number;
+  broken: BrokenCell[];
+  /** 이 단계에서 터진 폭탄 자리 */
+  bombs: Cell[];
+  /** 터지기 시작하는 칸(도장 칸 / 연쇄 덩어리에서 떨어져 이어 준 칸) */
+  seeds: Cell[];
+  moves: Move[];
+  spawns: Spawn[];
+}
+
+export interface Resolution {
+  steps: Step[];
+  /** 이번에 새로 생긴 폭탄 자리 (없으면 null) */
+  bomb: Cell | null;
+}
+
 export class BoardModel {
   readonly cols: number;
   readonly rows: number;
@@ -40,6 +73,10 @@ export class BoardModel {
   steerTarget = 15;
   steerTrials = 10;
   cells: Int32Array;
+  /** 이번 도장 때 새로 채워진 블록(1). 연쇄를 일으키지 않는다 → 보이는 블록만으로 연쇄를 읽을 수 있다. */
+  fresh: Uint8Array;
+  /** 폭탄 블록(1). 색은 그대로이고, 터질 때 주변 3×3도 터뜨린다. */
+  bombs: Uint8Array;
   rng: Rng;
 
   constructor(cols: number, rows: number, colors: number, seed = 0) {
@@ -48,6 +85,25 @@ export class BoardModel {
     this.numColors = colors;
     this.rng = new Rng(seed);
     this.cells = new Int32Array(cols * rows).fill(EMPTY);
+    this.fresh = new Uint8Array(cols * rows);
+    this.bombs = new Uint8Array(cols * rows);
+  }
+
+  /** 똑같은 보드(난수 상태 포함). 미리보기가 실제와 같은 결과를 미리 계산한다. */
+  clone(): BoardModel {
+    const m = new BoardModel(this.cols, this.rows, this.numColors, 1);
+    m.cells.set(this.cells);
+    m.fresh.set(this.fresh);
+    m.bombs.set(this.bombs);
+    m.rng = this.rng.clone();
+    m.clusterBias = this.clusterBias;
+    m.steerTarget = this.steerTarget;
+    m.steerTrials = this.steerTrials;
+    return m;
+  }
+
+  isBomb(x: number, y: number): boolean {
+    return this.bombs[y * this.cols + x] === 1;
   }
 
   inBounds(x: number, y: number): boolean {
@@ -109,14 +165,109 @@ export class BoardModel {
     return { stamp, all };
   }
 
+  /** 터질 칸에 폭탄이 있으면 주변 3×3을 더한다(그 안의 폭탄도 이어서 터진다). 터진 폭탄 자리를 돌려준다. */
+  expandBombs(cells: Cell[]): { cells: Cell[]; bombs: Cell[] } {
+    const { cols } = this;
+    const inside = new Set(cells.map((p) => p.y * cols + p.x));
+    const out = cells.slice();
+    const bombs: Cell[] = [];
+    for (let head = 0; head < out.length; head++) {
+      const p = out[head];
+      if (!this.bombs[p.y * cols + p.x]) continue;
+      bombs.push(p);
+      for (let dy = -BOMB_RADIUS; dy <= BOMB_RADIUS; dy++) {
+        for (let dx = -BOMB_RADIUS; dx <= BOMB_RADIUS; dx++) {
+          const x = p.x + dx, y = p.y + dy;
+          if (!this.inBounds(x, y) || this.get(x, y) === EMPTY || inside.has(y * cols + x)) continue;
+          inside.add(y * cols + x);
+          out.push({ x, y });
+        }
+      }
+    }
+    return { cells: out, bombs };
+  }
+
+  /**
+   * 떨어진 블록이 만든 연쇄: 새로 채운 블록을 빼고 같은 색으로 CHAIN_MIN칸 이상 이어진 덩어리 중
+   * 이번에 떨어진 블록이 들어 있는 것. 덩어리마다 떨어진 블록 칸을 seeds로 준다.
+   */
+  chainGroups(moved: Uint8Array): { cells: Cell[]; seeds: Cell[] } {
+    const { cols, rows, cells, fresh } = this;
+    const seen = new Uint8Array(cols * rows);
+    const out: Cell[] = [];
+    const seeds: Cell[] = [];
+    const group: number[] = [];
+    for (let start = 0; start < cols * rows; start++) {
+      if (seen[start] || cells[start] === EMPTY || fresh[start]) continue;
+      const color = cells[start];
+      group.length = 0;
+      seen[start] = 1;
+      group.push(start);
+      let hasMoved = false;
+      for (let head = 0; head < group.length; head++) {
+        const i = group[head];
+        if (moved[i]) hasMoved = true;
+        const x = i % cols;
+        for (const j of [x > 0 ? i - 1 : -1, x < cols - 1 ? i + 1 : -1, i >= cols ? i - cols : -1, i + cols < cols * rows ? i + cols : -1]) {
+          if (j >= 0 && !seen[j] && !fresh[j] && cells[j] === color) {
+            seen[j] = 1;
+            group.push(j);
+          }
+        }
+      }
+      if (group.length < CHAIN_MIN || !hasMoved) continue;
+      for (const i of group) {
+        const c = { x: i % cols, y: (i / cols) | 0 };
+        out.push(c);
+        if (moved[i]) seeds.push(c);
+      }
+    }
+    return { cells: out, seeds };
+  }
+
+  /**
+   * 한 번 찍은 결과 전체: 도장 → 낙하 → 연쇄 → 낙하 … 연쇄가 멈출 때까지 보드에 적용한다.
+   * 찍을 블록이 없으면 null(보드는 그대로). 미리보기는 clone()한 보드에 부른다.
+   */
+  resolve(ax: number, ay: number, offsets: Cell[], nextOffsets: Cell[] = []): Resolution | null {
+    const info = this.computeBreak(ax, ay, offsets);
+    if (info.stamp.length === 0) return null;
+    this.fresh.fill(0);
+    const n = this.cols * this.rows;
+    let burst = this.expandBombs(info.all);
+    let seeds = info.stamp;
+    const steps: Step[] = [];
+    for (let chain = 0; ; chain++) {
+      const broken = burst.cells.map((p) => ({ x: p.x, y: p.y, color: this.get(p.x, p.y) }));
+      const moved = new Uint8Array(n);
+      const { moves, spawns } = this.applyBreak(burst.cells, nextOffsets, moved);
+      steps.push({ chain, broken, bombs: burst.bombs, seeds, moves, spawns });
+      if (chain >= MAX_CHAIN) break;
+      const next = this.chainGroups(moved);
+      if (next.cells.length === 0) break;
+      burst = this.expandBombs(next.cells);
+      seeds = next.seeds;
+    }
+    let bomb: Cell | null = null;
+    if (steps.reduce((a, s) => a + s.broken.length, 0) >= BOMB_MIN) {
+      bomb = { x: ax, y: ay };
+      this.bombs[ay * this.cols + ax] = 1;
+    }
+    return { steps, bomb };
+  }
+
   /**
    * 블록을 제거하고 중력 낙하와 보충을 적용한다.
    * nextOffsets(다음에 쓸 모양)를 주면 "보충 조정": 새 블록 색 조합을 여러 번 뽑아 보고,
    * 그 모양으로 낼 수 있는 최대 파괴 수가 steerTarget에 가장 가까운 조합을 고른다.
    * → 보이는 NEXT 모양은 그대로, 아직 안 보인 새 블록 색만 골라 매 차례 최대치를 고르게 유지한다.
    */
-  applyBreak(targets: Cell[], nextOffsets: Cell[] = []): { moves: Move[]; spawns: Spawn[] } {
-    for (const p of targets) this.set(p.x, p.y, EMPTY);
+  applyBreak(targets: Cell[], nextOffsets: Cell[] = [], moved?: Uint8Array): { moves: Move[]; spawns: Spawn[] } {
+    for (const p of targets) {
+      this.set(p.x, p.y, EMPTY);
+      this.bombs[p.y * this.cols + p.x] = 0;
+      this.fresh[p.y * this.cols + p.x] = 0;
+    }
     const moves: Move[] = [];
     // 보충할 칸(왼쪽 열부터, 각 열은 아래에서 위로) + 화면 밖 시작 줄
     const empties: { x: number; y: number; fromY: number }[] = [];
@@ -126,8 +277,14 @@ export class BoardModel {
         const v = this.get(x, y);
         if (v === EMPTY) continue;
         if (y !== write) {
+          const from = y * this.cols + x, to = write * this.cols + x;
           this.set(x, write, v);
           this.set(x, y, EMPTY);
+          this.bombs[to] = this.bombs[from];
+          this.fresh[to] = this.fresh[from];
+          this.bombs[from] = 0;
+          this.fresh[from] = 0;
+          if (moved) moved[to] = 1;
           moves.push({ from: { x, y }, to: { x, y: write } });
         }
         write--;
@@ -150,6 +307,7 @@ export class BoardModel {
       }
       empties.forEach((e, i) => this.set(e.x, e.y, colors[i]));
     }
+    for (const e of empties) this.fresh[e.y * this.cols + e.x] = 1;
     const spawns = empties.map((e, i) => ({ to: { x: e.x, y: e.y }, color: colors[i], fromY: e.fromY }));
     return { moves, spawns };
   }

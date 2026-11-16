@@ -1,8 +1,8 @@
 import { roundRect } from "./board-view.ts";
 import { accentLine, ellipsisText, fitText, menuBackdrop, text, wrapText } from "./draw.ts";
 import { touchUI } from "./device.ts";
-import { Howto } from "./howto.ts";
-import { getLang, GRADE_KEYS, setLang, t, type TextKey } from "./i18n.ts";
+import { Howto, HOWTO_PAGES } from "./howto.ts";
+import { getLang, setLang, t, type TextKey } from "./i18n.ts";
 import { StampMenu, type StampFootprint } from "./stamp-menu.ts";
 import { alpha, font, SKIN } from "./skin.ts";
 import { ease, Tweens } from "./tween.ts";
@@ -52,8 +52,11 @@ export interface ResultData {
   score: number;
   best: number;
   newBest: boolean;
-  maxCombo: number;
-  grades: number[];
+  /** 한 번 찍어 낸 가장 긴 연쇄 */
+  maxChain: number;
+  /** 이번 판 전체 연쇄 수 / 터뜨린 폭탄 수 */
+  chains: number;
+  bombs: number;
   time: number;
   biggest: number;
 }
@@ -198,19 +201,31 @@ export class Menus {
       howto: {
         dim: 0.94,
         widgets: [
-          // 튜토리얼은 타이틀에서 빠지고 여기로: 읽고 나서 바로 연습해 볼 수 있게
-          { kind: "button", y: 1150, x: 214, width: 260, label: () => t("TUTORIAL_BTN"), onPress: () => this.actions.tutorial() },
-          { kind: "button", y: 1150, x: 498, width: 300, label: () => t("BACK"), primary: true, onPress: () => this.open("title") },
+          // 세 장을 「다음」으로 넘긴다. 첫 장 왼쪽은 타이틀로, 마지막 장 왼쪽은 튜토리얼(읽고 나서 바로 연습)
+          {
+            kind: "button", y: 1150, x: 214, width: 260, label: () => t("BACK"), onPress: () => this.open("title"),
+            hidden: () => this.howto.page !== 0,
+          },
+          {
+            kind: "button", y: 1150, x: 214, width: 260, label: () => t("HOWTO_PREV"), onPress: () => this.howtoPage(this.howto.page - 1),
+            hidden: () => this.howto.page !== 1,
+          },
+          {
+            kind: "button", y: 1150, x: 214, width: 260, label: () => t("TUTORIAL_BTN"), onPress: () => this.actions.tutorial(),
+            hidden: () => this.howto.page !== HOWTO_PAGES - 1,
+          },
+          {
+            kind: "button", y: 1150, x: 498, width: 300, primary: true,
+            label: () => t(this.howto.page < HOWTO_PAGES - 1 ? "HOWTO_NEXT" : "HOWTO_DONE"),
+            onPress: () => (this.howto.page < HOWTO_PAGES - 1 ? this.howtoPage(this.howto.page + 1) : this.open("title")),
+          },
         ],
         draw: (g) => {
           this.look.heading(g, t("HOW_TO_PLAY"));
           text(g, t("HOWTO_SUB"), W / 2, 196, 28, SKIN.muted, "center");
-          // 세 단락을 고른 간격으로 위에서부터 채우고, 조작 안내와 뒤로 버튼 사이에 숨 쉴 틈을 둔다
-          this.howto.drawSection(g, 0, 60, 236, 600);
-          this.howto.drawSection(g, 1, 60, 648, 600);
-          this.howto.drawSection(g, 2, 60, 870, 600);
+          this.howto.draw(g, 250);
           // 키보드 안내는 PC에서만(휴대폰에는 키보드가 없다)
-          if (!touchUI()) fitText(g, t("HOWTO_KEYS"), W / 2, 1098, 25, 624, SKIN.muted, "center");
+          if (!touchUI()) fitText(g, t("HOWTO_KEYS"), W / 2, 1104, 25, 624, SKIN.muted, "center");
         },
       },
       settings: {
@@ -329,6 +344,16 @@ export class Menus {
     this.actions.rankRefresh();
   }
 
+  /** 게임 방법 페이지 넘기기: 그림을 처음부터 다시 돌리고 선택 표시를 「다음」으로 */
+  private howtoPage(page: number): void {
+    this.howto.reset(Math.max(0, Math.min(HOWTO_PAGES - 1, page)));
+    this.focus = -1;
+    this.hover = -1;
+    this.look.resetSelection();
+    this.updateSelection(0);
+    this.actions.click();
+  }
+
   private openSettings(back: PanelId): void {
     this.settingsBack = back;
     this.open("settings");
@@ -336,7 +361,8 @@ export class Menus {
 
   /** Esc / 뒤로 가기 */
   back(): void {
-    if (this.current === "howto" || this.current === "ranking") this.open("title");
+    if (this.current === "howto" && this.howto.page > 0) this.howtoPage(this.howto.page - 1);
+    else if (this.current === "howto" || this.current === "ranking") this.open("title");
     else if (this.current === "settings") this.open(this.settingsBack);
     else if (this.current === "pause") this.actions.resume();
   }
@@ -552,7 +578,7 @@ export class Menus {
   private playResult(): void {
     const r = this.result;
     if (!r) return;
-    const targets = [[r.maxCombo], r.grades.slice(), [r.time], [r.biggest]];
+    const targets = [[r.maxChain], [r.chains, r.bombs], [r.time], [r.biggest]];
     const an: ResultAnim = {
       running: true, title: 0, score: 0, scoreA: 0, scoreScale: 1, best: 0, stamp: 0, stampScale: 1,
       rows: targets.map((v) => ({ a: 0, dx: 180, values: v.map(() => 0) })), buttons: 0,
@@ -616,7 +642,7 @@ export class Menus {
     if (!r || !an) return;
     this.tweens.clear();
     Object.assign(an, { running: false, title: 1, score: r.score, scoreA: 1, scoreScale: 1, best: 1, stamp: r.newBest ? 1 : 0, stampScale: 1, buttons: 1 });
-    const targets = [[r.maxCombo], r.grades, [r.time], [r.biggest]];
+    const targets = [[r.maxChain], [r.chains, r.bombs], [r.time], [r.biggest]];
     an.rows.forEach((row, i) => Object.assign(row, { a: 1, dx: 0, values: targets[i].slice() }));
   }
 
@@ -762,16 +788,17 @@ export class Menus {
       if (i === 1) {
         look.lettering(g, t("RESULT_GRADES"), 64, 782, 28, 592, SKIN.muted, "left", false);
         slantBand(g, 64, 801, 592 * sweep, 4, SKIN.muted);
-        const max = Math.max(1, ...r.grades);
-        for (let k = 0; k < 4; k++) {
-          const x = 64 + k % 2 * 324, y = 846 + Math.floor(k / 2) * 98;
-          look.lettering(g, t(GRADE_KEYS[k]), x, y, 28, 162, SKIN.grades[k], "left", false);
-          look.lettering(g, String(row.values[k]), x + 268, y, 39, 100, SKIN.text, "right");
-          look.meter(g, x, y + 25, 268, row.values[k] / max, SKIN.grades[k]);
+        // 이번 판 연쇄 수 · 터뜨린 폭탄 수
+        const names: TextKey[] = ["R_CHAINS", "R_BOMBS"], cols = ["#ffc733", "#ffffff"];
+        for (let k = 0; k < 2; k++) {
+          const x = 64 + k * 324, y = 866;
+          look.lettering(g, t(names[k]), x, y, 28, 162, cols[k], "left", false);
+          look.lettering(g, String(row.values[k]), x + 268, y, 44, 100, SKIN.text, "right");
+          slantBand(g, x, y + 26, 268 * sweep, 4, cols[k]);
         }
       } else {
         const x = statX[i], value = row.values[0];
-        const name = i === 0 ? "R_MAX_COMBO" : i === 2 ? "R_TIME" : "R_BIGGEST";
+        const name = i === 0 ? "R_MAX_CHAIN" : i === 2 ? "R_TIME" : "R_BIGGEST";
         const val = i === 2 ? t("SEC_FMT", value) : i === 3 ? t("COUNT_FMT", value) : String(value);
         const col = i === 0 ? SKIN.score : i === 2 ? SKIN.accent : SKIN.timeText;
         fitText(g, t(name), x, 634, 27, 180, SKIN.muted, "center");

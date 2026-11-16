@@ -1,5 +1,5 @@
 import { BoardModel } from "./board-model.ts";
-import { bestMove } from "./bot.ts";
+import { planMoves } from "./bot.ts";
 import { GAME_TIME, GameRules, STAMP_COOLDOWN } from "./game-rules.ts";
 import { ShapeQueue } from "./shape-queue.ts";
 import type { Shape } from "./shapes.ts";
@@ -14,7 +14,7 @@ import type { Shape } from "./shapes.ts";
  * 이 파일과 같은 폴더의 규칙 코드는 서버(supabase/functions/_shared/core)에 그대로 복사해 쓴다.
  * 규칙을 바꾸면 REPLAY_VERSION을 올리고 서버 함수도 다시 배포해야 한다(README 참고).
  */
-export const REPLAY_VERSION = 1;
+export const REPLAY_VERSION = 2;
 
 export const BOARD_COLS = 8;
 export const BOARD_ROWS = 9;
@@ -113,15 +113,20 @@ export function simulateRun(seed: number, replay: unknown): SimResult {
     holdUsed = true;
     return true;
   };
-  /** 게임의 tryPlace → BoardView.placeAt과 같다. 판정 기준(bestN)은 찍기 직전 보드에서 계산한다. */
-  const stamp = (x: number, y: number): { n: number; bestN: number } | null => {
-    const info = board.computeBreak(x, y, current.cells);
-    if (info.stamp.length === 0) return null;
-    const bestN = bestMove(board, current.cells).count;
-    board.applyBreak(info.all, queue.peek(1)[0].cells);
+  /** 게임의 tryPlace → BoardView.placeAt과 같다(도장 → 낙하 → 연쇄를 끝까지). */
+  const stamp = (x: number, y: number, tutorial = false): { counts: number[]; bombs: number } | null | "tutorial" => {
+    const next = queue.peek(1)[0].cells;
+    // 튜토리얼은 화살표 자리(점수가 가장 높은 자리, 동점 자리 모두)만 받는다
+    if (tutorial) {
+      const plans = planMoves(board, current.cells, next);
+      const mine = plans.find((p) => p.x === x && p.y === y);
+      if (!mine || mine.points < plans[0].points) return "tutorial";
+    }
+    const res = board.resolve(x, y, current.cells, next);
+    if (!res) return null;
     current = queue.pop();
     holdUsed = false;
-    return { n: info.all.length, bestN };
+    return { counts: res.steps.map((s) => s.broken.length), bombs: res.steps.reduce((a, s) => a + s.bombs.length, 0) };
   };
 
   // 튜토리얼: 점수·시간은 버리지만 보드와 모양 순서는 본 게임으로 이어진다. 최고 자리만 찍을 수 있다.
@@ -133,8 +138,8 @@ export function simulateRun(seed: number, replay: unknown): SimResult {
         continue;
       }
       if (++stamps > TUTORIAL_STAMPS) return fail("tutorial");
-      const res = stamp(e[2], e[3]);
-      if (!res || res.n < res.bestN) return fail("tutorial");
+      const res = stamp(e[2], e[3], true);
+      if (!res || res === "tutorial") return fail("tutorial");
     }
     held = null;
     holdUsed = false;
@@ -156,13 +161,14 @@ export function simulateRun(seed: number, replay: unknown): SimResult {
     if (t - lastStamp < STAMP_COOLDOWN - EPS) return fail("cooldown");
     lastStamp = t;
     const res = stamp(e[2], e[3]);
-    if (!res) return fail("empty");
-    rules.registerBreak(res.n, res.bestN);
+    if (!res || res === "tutorial") return fail("empty");
+    rules.registerStamp(res.counts, res.bombs);
   }
   return {
     ok: true,
     score: rules.score,
-    maxCombo: rules.maxCombo,
+    // 서버 표의 max_combo 칸에는 가장 긴 연쇄를 넣는다
+    maxCombo: rules.maxChain,
     biggest: rules.biggest,
     duration: rules.elapsed + Math.max(0, rules.timeLeft),
   };

@@ -1,4 +1,5 @@
 import type { BoardModel } from "./board-model.ts";
+import { basePoints, chainMult } from "./game-rules.ts";
 import type { Cell } from "./shapes.ts";
 
 /**
@@ -45,4 +46,33 @@ export function allMoves(model: BoardModel, offsets: Cell[]): MoveResult[] {
     }
   }
   return out.sort((a, b) => b.count - a.count);
+}
+
+export interface PlanResult {
+  x: number;
+  y: number;
+  /** 단계별 부순 칸 수(0 = 도장, 1.. = 연쇄) */
+  counts: number[];
+  bombs: number;
+  /** 배율(연쇄)을 넣은 점수 (피버 배율은 빼고) */
+  points: number;
+}
+
+/**
+ * 모든 자리를 실제로 찍어 본(보드 복사본에서 연쇄까지) 결과를 점수 높은 순으로 돌려준다.
+ * 같은 점수면 위·왼쪽 자리가 먼저다(결과가 늘 같다). 튜토리얼 화살표, 자동 플레이, 시뮬레이션에 쓴다.
+ */
+export function planMoves(model: BoardModel, offsets: Cell[], nextOffsets: Cell[] = []): PlanResult[] {
+  const out: PlanResult[] = [];
+  for (let y = 0; y < model.rows; y++) {
+    for (let x = 0; x < model.cols; x++) {
+      const res = model.clone().resolve(x, y, offsets, nextOffsets);
+      if (!res) continue;
+      const counts = res.steps.map((s) => s.broken.length);
+      const bombs = res.steps.reduce((a, s) => a + s.bombs.length, 0);
+      const points = counts.reduce((a, n, c) => a + basePoints(n) * chainMult(c), 0);
+      out.push({ x, y, counts, bombs, points });
+    }
+  }
+  return out.sort((a, b) => b.points - a.points);
 }

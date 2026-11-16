@@ -20,6 +20,13 @@ export class Rng {
     return min + Math.floor(this.next() * (max - min + 1));
   }
 
+  /** 같은 상태에서 이어지는 복사본(미리보기에서 앞으로 나올 값을 그대로 미리 계산할 때) */
+  clone(): Rng {
+    const r = new Rng(1);
+    r.s = this.s;
+    return r;
+  }
+
   range(min: number, max: number): number {
     return min + this.next() * (max - min);
   }

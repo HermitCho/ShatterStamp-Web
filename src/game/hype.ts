@@ -13,7 +13,7 @@ import { ease, Tweens } from "./tween.ts";
  */
 
 interface Banner { text: string; color: string; x: number; a: number; streak: number }
-interface ComboNum { n: number; x: number; y: number; color: string; scale: number; a: number; dy: number }
+interface ComboNum { n: number; label: string; x: number; y: number; color: string; scale: number; a: number; dy: number }
 interface Praise { text: string; color: string; scale: number; a: number; rot: number }
 interface Chip { text: string; color: string; x: number; y: number; scale: number; a: number }
 
@@ -73,10 +73,10 @@ export class Hype {
   }
 
   /** 도장 자리에 콤보 숫자: 크게 툭 튀어나왔다가 제자리, 잠깐 뒤 떠오르며 사라진다. */
-  showCombo(n: number, x: number, y: number, color: string): void {
+  showCombo(n: number, x: number, y: number, color: string, label = "COMBO"): void {
     const bx = this.box;
     const c: ComboNum = {
-      n, color, scale: 1.7, a: 1, dy: 0,
+      n, label, color, scale: 1.7, a: 1, dy: 0,
       x: Math.min(Math.max(x, bx.x + 80), bx.x + bx.w - 80),
       y: Math.min(Math.max(y, bx.y + 70), bx.y + bx.h - 70),
     };
@@ -180,7 +180,7 @@ export class Hype {
       g.fillStyle = shade;
       g.fillRect(-100, -80, 200, 180);
       neonText(g, String(c.n), 0, -4, 84, c.color, a, 0.35, -2);
-      neonText(g, "COMBO", 0, 50, 22, mix(c.color, "#ffffff", 0.3), a * 0.9, 0.5, 5);
+      neonText(g, c.label, 0, 50, 22, mix(c.color, "#ffffff", 0.3), a * 0.9, 0.5, 5);
       g.restore();
     }
   }

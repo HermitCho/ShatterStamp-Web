@@ -1,11 +1,11 @@
 import { touchUI } from "./device.ts";
-import { bestMove } from "../core/bot.ts";
-import { GAME_TIME, GameRules, Grade, STAMP_COOLDOWN, tierFor, type BreakResult } from "../core/game-rules.ts";
+import { planMoves } from "../core/bot.ts";
+import { FEVER_NEED, FEVER_TIME, GAME_TIME, GameRules, STAMP_COOLDOWN, type StampResult } from "../core/game-rules.ts";
 import { BOARD_COLORS, BOARD_COLS, BOARD_ROWS, localSeed, newBoard, newQueue, REPLAY_VERSION, type Replay, type ReplayEvent } from "../core/replay.ts";
 import { ShapeQueue } from "../core/shape-queue.ts";
 import type { Cell, Shape } from "../core/shapes.ts";
 import { Sfx } from "./audio.ts";
-import { BoardView, CELL, BLOCK, roundRect, type BreakEvent } from "./board-view.ts";
+import { BoardView, CELL, BLOCK, chainColor, roundRect, type BreakEvent, type StepEvent } from "./board-view.ts";
 import { Fx } from "./fx.ts";
 import { Hype } from "./hype.ts";
 import { Menus } from "./menus.ts";
@@ -15,7 +15,7 @@ import { Music } from "./music.ts";
 import { StageFx } from "./stage.ts";
 import { TitleScreen } from "./title.ts";
 import { Tutorial, type Rect as TRect } from "./tutorial.ts";
-import { GRADE_KEYS, t } from "./i18n.ts";
+import { t } from "./i18n.ts";
 import { accentLine, fitText, outlined, panel, text } from "./draw.ts";
 import { alpha, font, mix, SKIN } from "./skin.ts";
 import { ease, Tweens } from "./tween.ts";
@@ -60,7 +60,10 @@ const PAUSE_BTN = { x: 616, y: 12, w: 84, h: 84 };
 /** 판 영역(화면 좌표) */
 const BOARD_BOX = { x: BOARD_X, y: BOARD_Y, w: BOARD_COLS * CELL * BOARD_SCALE, h: BOARD_ROWS * CELL * BOARD_SCALE };
 /** 점수 숫자 자리(점수 조각이 날아가는 곳) */
-const SCORE_AT = { x: 120, y: 112 + PLAY_OY };
+/** 점수 숫자 자리(오른쪽 위). 점수 조각이 이리로 빨려 들어간다. */
+const SCORE_AT = { x: 148, y: 112 + PLAY_OY };
+/** 떠오르는 글자 움직임: 쾅 / 튀어나옴 / 떠오름 / 흔들리다 떨어짐 */
+const Pop = { BIG: 0, BOUNCE: 1, PLAIN: 2, DROP: 3 } as const;
 /** 판 아래 바닥 격자의 지평선 */
 const FLOOR_Y = 1078;
 /** 이어하기 뒤 다시 멈출 수 있기까지의 시간(초). 멈춤·이어하기를 반복해 생각할 시간을 버는 꼼수를 줄인다. */
@@ -123,10 +126,13 @@ export class Game {
   private flash = { color: "#ffffff", a: 0 };
   private inFever = false;
   private bgMix = 0;
-  private perfectStreak = 0;
   private floats: FloatText[] = [];
+  /** 판 위쪽 줄의 이번 찍기 결과(연쇄 수 · 얻은 점수) */
   private gradeFloat: FloatText | null = null;
-  private comboText = { text: "", color: SKIN.text, scale: 1, alpha: 0 };
+  /** 이번 찍기 연출 동안 다음 찍기를 막는 전체 시간(NOW 칸 아래 막대 비율) */
+  private lockTotal = STAMP_COOLDOWN;
+  /** 피버 게이지가 차오를 때 잠깐 밝아진다 */
+  private gaugePulse = 0;
   private timePulse = 1;
   /** 점수 조각이 도착할 때 점수 숫자가 툭 커진다 */
   private scorePulse = 1;
@@ -255,6 +261,7 @@ export class Game {
       y += h + 6;
     }
     this.board.setup(COLS, ROWS, COLORS, opts.seed ?? 0);
+    this.board.scorer = (counts) => this.rules.pointsFor(counts);
     if (this.autoplay) this.start();
     else {
       this.gate = true;
@@ -578,11 +585,10 @@ export class Game {
 
   private toTitle(): void {
     this.run++;
-    this.breakCombo(true);
+    this.exitFever(true);
     this.stage.clear();
     this.hype.clear();
     this.tutorial.close();
-    this.comboText.alpha = 0;
     this.floats = [];
     this.board.setup(COLS, ROWS, COLORS);
     this.held = null;
@@ -620,10 +626,8 @@ export class Game {
     this.holdUsed = false;
     this.stampLock = 0;
     this.pauseLock = 0;
-    this.perfectStreak = 0;
     this.inFever = false;
     this.board.fever = false;
-    this.comboText.alpha = 0;
     this.lastTick = -1;
     this.stage.clear();
     this.hype.clear();
@@ -704,8 +708,7 @@ export class Game {
     // 연습한 점수·콤보는 버리고 깨끗하게 시작한다(보드는 그대로).
     this.rules.reset();
     this.rules.timeLeft = this.startTime;
-    this.perfectStreak = 0;
-    this.comboText.alpha = 0;
+    this.exitFever(true);
     this.hype.clear();
     this.held = null;
     this.holdUsed = false;
@@ -713,9 +716,14 @@ export class Game {
     this.beginCountdown();
   }
 
-  /** 지금 모양을 가장 많이 부수는 자리의 칸들(화면 좌표). 첫 칸이 찍을 칸(모양의 가운데 = 마우스 칸)이다. */
+  /** 지금 모양으로 점수가 가장 높은 자리(연쇄까지 계산) */
+  private bestPlan() {
+    return planMoves(this.board.model, this.current.cells, this.queue.peek(1)[0].cells)[0];
+  }
+
+  /** 점수가 가장 높은 자리의 칸들(화면 좌표). 첫 칸이 찍을 칸(모양의 가운데 = 마우스 칸)이다. */
   private bestCells(): TRect[] {
-    const mv = bestMove(this.board.model, this.current.cells);
+    const mv = this.bestPlan();
     const cs = CELL * BOARD_SCALE;
     const center = this.current.cells.filter((o) => o.x === 0 && o.y === 0);
     const rest = this.current.cells.filter((o) => o.x !== 0 || o.y !== 0);
@@ -725,11 +733,13 @@ export class Game {
       .map((p) => ({ x: BOARD_X + p.x * cs, y: BOARD_Y + p.y * cs, w: cs, h: cs }));
   }
 
-  /** 튜토리얼 1~3단계는 최고 자리(PERFECT, 동점 자리 모두)만 받는다. */
+  /** 튜토리얼 1~3단계는 화살표 자리(점수가 가장 높은 자리, 동점 자리 모두)만 받는다. 서버 검증과 같은 규칙. */
   private tutRejects(c: Cell): boolean {
     if (this.state !== "tutorial") return false;
-    if (!this.tutAccepting) return true;
-    return this.board.model.computeBreak(c.x, c.y, this.current.cells).all.length < this.board.bestN;
+    if (!this.tutAccepting || this.stampLock > 0) return true;
+    const plans = planMoves(this.board.model, this.current.cells, this.queue.peek(1)[0].cells);
+    const mine = plans.find((p) => p.x === c.x && p.y === c.y);
+    return !mine || mine.points < plans[0].points;
   }
 
   private onTutRejected(c: Cell): void {
@@ -740,17 +750,42 @@ export class Game {
     this.float([{ text: t("TUT_WRONG"), size: 30, color: "#ffd94d" }], Math.min(Math.max(x, 210), 510), y);
   }
 
+  /**
+   * 판 끝 연출: 모든 게 멈칫(느린 화면 + 판 테두리 붉은 빛) → TIME UP 쾅 → 남은 블록이 대각선으로 차례로 부서짐 → 결과 화면.
+   */
   private end(): void {
     this.state = "result";
     this.board.setAnchor(null);
     this.hype.flushChips();
-    this.breakCombo(true);
+    this.exitFever(true);
     this.stage.danger = 0;
-    this.stage.timeUp();
     this.music.endGame();
     this.sfx.play("end");
-    this.sfx.play("big", 0.8);
-    this.trauma = Math.min(1, this.trauma + 0.5);
+    this.hitstop = 0.3;
+    this.flashScreen("#ffffff", 0.35);
+    this.board.frameKick(SKIN.warn, 70, 0.6);
+    const run0 = this.run;
+    this.tweens.add().wait(0.3).call(() => {
+      if (this.run !== run0) return;
+      this.stage.timeUp();
+      this.sfx.play("big", 0.8);
+      this.trauma = Math.min(1, this.trauma + 0.5);
+    });
+    // 남은 블록 연출(점수 없음, 끝났다는 손맛): 판 가운데에서 충격파가 퍼지며 가까운 블록부터 튕겨 부서진다
+    const end = this.board.shockAll(0.75);
+    const pieces = end.pieces;
+    this.tweens.add().wait(0.75).call(() => {
+      if (this.run !== run0) return;
+      this.fx.ring(end.cx, end.cy, 900, SKIN.ring);
+      this.sfx.play("big", 1.2);
+    });
+    pieces.forEach((b, i) => {
+      this.tweens.add().wait(b.delay).call(() => {
+        if (this.run !== run0) return;
+        this.fx.burst(b.x, b.y, SKIN.blocks[b.color], 3, 260);
+        if (i % 6 === 0) this.sfx.play("pop", 0.8 + (i / pieces.length) * 0.8, -10);
+      });
+    });
     const r = this.rules;
     const newBest = r.score > this.best && !this.autoplay;
     if (r.score > this.localBest && !this.autoplay) {
@@ -762,13 +797,13 @@ export class Game {
       }
     }
     this.menus.result = {
-      score: r.score, best: this.best, newBest, maxCombo: r.maxCombo,
-      grades: r.gradeCounts.slice(), time: Math.round(r.bonusTimeTotal), biggest: r.biggest,
+      score: r.score, best: this.best, newBest, maxChain: r.maxChain,
+      chains: r.chainTotal, bombs: r.bombTotal, time: Math.round(r.bonusTimeTotal), biggest: r.biggest,
     };
     this.menus.best = this.best;
     this.submitScore();
     const run = this.run;
-    this.tweens.add().wait(1.5).call(() => {
+    this.tweens.add().wait(end.last + 0.55).call(() => {
       if (this.run !== run || this.state !== "result") return;
       this.stage.clear();
       this.menus.open("result");
@@ -829,37 +864,56 @@ export class Game {
       this.onBlocked();
       return;
     }
-    const bestN = this.board.bestN;
     const ev = this.board.placeAt(c.x, c.y);
     if (!ev) return;
     this.record(["s", this.state === "tutorial" ? 0 : this.rules.elapsed, c.x, c.y]);
-    this.onBroke(ev, bestN);
+    this.onBroke(ev);
   }
 
-  private onBroke(ev: BreakEvent, bestN: number): void {
-    const r = this.rules.registerBreak(ev.count, bestN);
-    this.stampLock = STAMP_COOLDOWN;
-    this.perfectStreak = r.grade === Grade.PERFECT ? this.perfectStreak + 1 : 0;
-    this.juice(ev, r);
-    this.gradeText(r, ev);
-    this.hype.addChip(r.points, ev.ax, ev.ay, SKIN.tiers[r.tier]);
-    if (this.state === "tutorial") {
+  /** 점수는 바로 계산하고, 화면은 단계(도장 → 연쇄 1 → 연쇄 2 …)마다 시간에 맞춰 터뜨린다. */
+  private onBroke(ev: BreakEvent): void {
+    const tutorial = this.state === "tutorial";
+    const r = this.rules.registerStamp(ev.counts, ev.bombCount);
+    if (tutorial) {
       this.rules.timeLeft = this.startTime; // 연습 중에는 시간이 늘거나 줄지 않는다
       r.timeDelta = 0;
     }
-    if (r.timeDelta > 0) {
-      this.float([{ text: t("TIME_DELTA_FMT", `+${r.timeDelta}`), size: 28, color: "#66ff99" }], 610, 250).placement = "time";
-      this.sfx.play("bonus");
-      this.timePulse = 1.25;
-    } else if (r.timeDelta < 0) {
-      this.float([{ text: t("TIME_DELTA_FMT", r.timeDelta), size: 28, color: "#ff5959" }], 610, 250).placement = "time";
-    }
-    if (r.grade === Grade.MISS) this.breakCombo();
+    // 연쇄 연출이 끝날 때까지 다음 찍기를 막는다(빨리 누르기보다 잘 찍기)
+    this.stampLock = this.lockTotal = Math.max(STAMP_COOLDOWN, ev.duration);
+    const run = this.run;
+    let sum = 0;
+    ev.steps.forEach((st, i) => {
+      sum += r.stepPoints[i];
+      const upTo = sum;
+      this.tweens.add().wait(st.at).call(() => {
+        if (this.run !== run) return;
+        this.juiceStep(st, r.stepPoints[i], ev);
+        this.stampLine(st.chain, upTo, ev);
+      });
+    });
+    this.tweens.add().wait(ev.duration).call(() => this.run === run && this.stampDone(ev, r));
     this.current = this.queue.pop();
     this.holdUsed = false;
     this.refreshPieces();
     this.slideQueue();
-    if (this.state === "tutorial" && this.tutStep <= 3) this.nextTut(0.55);
+    if (tutorial && this.tutStep <= 3) this.nextTut(ev.duration + 0.45);
+  }
+
+  /** 모든 단계가 끝난 뒤: 시간 보너스, 새 폭탄, 피버 시작 */
+  private stampDone(ev: BreakEvent, r: StampResult): void {
+    if (r.timeDelta > 0) {
+      this.float([{ text: t("TIME_DELTA_FMT", `+${r.timeDelta}`), size: 28, color: "#66ff99" }], 610, 250).placement = "time";
+      this.sfx.play("bonus");
+      this.timePulse = 1.25;
+    }
+    if (ev.bomb) {
+      this.fx.ring(ev.bomb.x, ev.bomb.y, 90, "rgba(255,255,255,0.9)");
+      this.fx.sparkle(ev.bomb.x, ev.bomb.y, "#ffffff", 10, 300);
+      this.sfx.play("sparkle", 1.2, -4);
+      this.float([{ text: t("BOMB_NEW"), size: 30, color: "#ffffff" }], ev.bomb.x, ev.bomb.y - 50, false, Pop.BOUNCE);
+    }
+    if (r.chains > 0 || r.bombs > 0) this.gaugePulse = 1;
+    if (r.feverStarted && (this.state === "play" || this.state === "tutorial")) this.enterFever();
   }
 
   /** 쿨다운 중에 찍으려 하면 NOW 칸을 살짝 흔들어 "아직"이라고 알려 준다. */
@@ -869,100 +923,72 @@ export class Game {
     this.tweens.add().to(0.12, (k) => (s.oy = Math.sin(k * Math.PI * 3) * 6 * (1 - k)));
   }
 
-  /** quiet: 판이 끝나거나 타이틀로 갈 때처럼 "FEVER END" 연출 없이 조용히 끝낸다. */
-  private breakCombo(quiet = false): void {
-    this.tweens.add().to(0.25, (k) => (this.comboText.alpha = 1 - k));
-    if (this.inFever) {
-      this.inFever = false;
-      this.board.fever = false;
-      this.music.setFever(false);
-      this.stage.feverGlow = 0;
-      if (quiet) this.stage.hideFeverBadge();
-      else {
-        this.stage.feverEnd();
-        this.sfx.play("fever_end", 1, -3);
-      }
+  /** 피버 끝. quiet: 판이 끝나거나 타이틀로 갈 때처럼 "FEVER END" 연출 없이 조용히 끝낸다. */
+  private exitFever(quiet = false): void {
+    if (!this.inFever) return;
+    this.inFever = false;
+    this.board.fever = false;
+    this.music.setFever(false);
+    this.stage.feverGlow = 0;
+    if (quiet) this.stage.hideFeverBadge();
+    else {
+      this.stage.feverEnd();
+      this.sfx.play("fever_end", 1, -3);
     }
   }
 
   // ---------------------------------------------------------------- 타격감
 
-  private juice(ev: BreakEvent, r: BreakResult): void {
-    const n = ev.count, tier = r.tier;
-    const power = 280 + tier * 110;
-    let amount = 4 + tier * 2;
-    if (ev.broken.length > 35) amount = Math.max(2, amount - 2);
-    for (const b of ev.broken) {
-      const col = SKIN.blocks[b.color];
+  /** 한 단계가 터질 때. 연쇄가 깊을수록 색·소리·흔들림이 세진다. */
+  private juiceStep(st: StepEvent, points: number, ev: BreakEvent): void {
+    const n = st.count, ch = st.chain, lv = Math.min(ch, 3), col = chainColor(ch);
+    const power = 280 + lv * 110;
+    let amount = 4 + lv * 2;
+    if (st.broken.length > 35) amount = Math.max(2, amount - 2);
+    for (const b of st.broken) {
+      const bc = SKIN.blocks[b.color];
       // 번지는 파괴에 맞춰 블록마다 차례로 터뜨린다
-      this.tweens.add().wait(b.delay).call(() => {
-        this.fx.burst(b.x, b.y, col, amount, power);
-        this.fx.flash(b.x, b.y, BLOCK * BOARD_SCALE, mix(col, "#ffffff", 0.75));
+      this.tweens.add().wait(b.delay - st.at).call(() => {
+        this.fx.burst(b.x, b.y, bc, amount, power);
+        this.fx.flash(b.x, b.y, BLOCK * BOARD_SCALE, mix(bc, "#ffffff", 0.75));
       });
     }
-    this.fx.ring(ev.ax, ev.ay, 70 + n * 6 + tier * 40, SKIN.ring);
-
-    if (r.grade === Grade.MISS) {
-      // 실수는 약하고 둔탁하게: 짧은 흔들림 + 낮은 소리 + 붉은 섬광
-      this.trauma = Math.min(1, this.trauma + 0.25);
-      this.sfx.play("break", 0.7, -6);
-      this.sfx.play("miss");
-      this.flashScreen("#ff1a1a", 0.18);
-      return;
+    for (const bm of st.bombs) {
+      // 폭탄: 3×3이 한꺼번에 터지는 흰 충격파
+      this.tweens.add().wait(bm.delay - st.at).call(() => {
+        const cs = CELL * BOARD_SCALE;
+        this.fx.ring(bm.x, bm.y, cs * 2.2, "rgba(255,255,255,0.95)");
+        this.fx.ring(bm.x, bm.y, cs * 1.4, col);
+        this.fx.sparkle(bm.x, bm.y, "#ffffff", 14, 520);
+        this.flashScreen("#ffffff", 0.22);
+        this.trauma = Math.min(1, this.trauma + 0.35);
+        this.hitstop = Math.max(this.hitstop, 0.06);
+        this.sfx.play("big", 1.15, -1);
+      });
     }
-    const perfect = r.grade === Grade.PERFECT;
-    this.trauma = Math.min(1, this.trauma + 0.12 + n * 0.012 + tier * 0.08 + (perfect ? 0.1 : 0));
-    if (n >= 12 || tier >= 1 || perfect) this.hitstop = 0.025 + Math.min(n, 40) * 0.0012 + tier * 0.015;
+    const x = ch === 0 ? ev.ax : st.cx, y = ch === 0 ? ev.ay : st.cy;
+    this.fx.ring(x, y, 70 + n * 6 + lv * 40, ch === 0 ? SKIN.ring : col);
+    this.trauma = Math.min(1, this.trauma + 0.1 + n * 0.01 + lv * 0.07);
+    if (n >= 12 || ch >= 1) this.hitstop = Math.max(this.hitstop, 0.025 + Math.min(n, 40) * 0.0012 + lv * 0.012);
     this.sfx.play("break", (0.9 + Math.random() * 0.2) * (n >= 15 ? 0.85 : 1));
-    this.sfx.play("pop", 1 + Math.min(this.rules.combo - 1, 24) * 0.055, -4);
-    if (perfect) {
-      // PERFECT 보상: 금빛 별 + 겹 링 + 연속 PERFECT마다 한 음씩 올라가는 차임
-      const gold = SKIN.grades[Grade.PERFECT];
-      const s = Math.min(this.perfectStreak, 8);
-      this.fx.sparkle(ev.ax, ev.ay, gold, 10 + s * 3, 420 + s * 40);
-      this.fx.ring(ev.ax, ev.ay, 110 + n * 7 + s * 12, gold);
-      const pitch = Math.pow(2, ((s - 1) * 2) / 12);
+    this.sfx.play("pop", 1 + ch * 0.12, -4);
+    if (ch >= 1) {
+      // 연쇄: 단계마다 한 음씩 올라가는 차임 + 판 위에 큰 연쇄 숫자
+      const pitch = Math.pow(2, ((Math.min(ch, 8) - 1) * 2) / 12);
       this.sfx.play("perfect", pitch, -3);
-      this.sfx.play("sparkle", 0.95 + Math.random() * 0.13, -8);
-      if (s >= 3) this.sfx.play("perfect", pitch * 1.5, -10);
-      if (tier < 2) this.flashScreen("#ffffff", 0.06 + s * 0.015);
+      if (ch >= 2) this.sfx.play("sparkle", 0.95 + ch * 0.05, -8);
+      this.fx.sparkle(x, y, col, 6 + lv * 4, 360 + lv * 50);
+      this.hype.showCombo(ch, x, y, col, "CHAIN");
+      if (ch >= 3) this.flashScreen("#ffffff", 0.08 + Math.min(ch - 3, 3) * 0.05);
+      if (ch >= 3 && ch % 2 === 1) {
+        this.hype.showPraise((ch - 3) / 2, ch >= 5 ? SKIN.timeText : SKIN.accent);
+        this.sfx.play("sparkle", 1.1, -4);
+      }
     }
     if (n >= 15) this.sfx.play("big");
-    if (tier >= 2) this.flashScreen("#ffffff", 0.1 + (tier - 2) * 0.08);
-    // 판 테두리 빛 고리: 아주 크게 부쉈을 때와 연속 PERFECT 3·6·9…번째에만(너무 자주면 무뎌진다)
-    if (n >= 18 || (perfect && this.perfectStreak >= 3 && this.perfectStreak % 3 === 0)) {
-      this.board.frameKick(perfect ? SKIN.grades[Grade.PERFECT] : SKIN.tiers[tier], 30 + Math.min(n, 30));
-    }
-    if (tier >= 3 && !this.inFever) this.enterFever();
-    this.comboPop(tier);
-    this.hypeFor(ev, tier);
-  }
-
-  /** 콤보 숫자는 매번, 칭찬 글자는 5·15·25…, 돌파 띠는 20·30…(10은 피버 띠) */
-  private hypeFor(ev: BreakEvent, tier: number): void {
-    const c = this.rules.combo, col = SKIN.tiers[tier];
-    if (c >= 2) this.hype.showCombo(c, ev.ax, ev.ay, col);
-    if (c % 10 === 5) {
-      this.hype.showPraise(Math.floor(c / 10), c >= 15 ? SKIN.timeText : SKIN.accent);
-      this.sfx.play("sparkle", 1.1, -4);
-    }
-    if (c >= 20 && c % 10 === 0) {
-      this.hype.showBanner(t("COMBO_FMT", c) + "!", col);
-      this.sfx.play("start", 1.35, -5);
-    }
-  }
-
-  private comboPop(tier: number): void {
-    if (this.rules.combo < 2) {
-      this.comboText.alpha = 0;
-      return;
-    }
-    const c = this.comboText;
-    c.text = t("COMBO_FMT", this.rules.combo);
-    c.color = SKIN.tiers[tier];
-    c.alpha = 1;
-    const from = 1.3 + tier * 0.15;
-    this.tweens.add().to(0.2, (k) => (c.scale = from + (1 - from) * k), ease.outBack);
+    // 판 테두리 빛 고리: 아주 크게 부쉈을 때와 두 번째 연쇄부터(너무 자주면 무뎌진다)
+    if (n >= 18 || ch >= 2) this.board.frameKick(col, 30 + Math.min(n, 30) + lv * 10);
+    this.hype.addChip(points, x, y, col);
   }
 
   private enterFever(): void {
@@ -987,22 +1013,17 @@ export class Game {
     this.flash.a = a;
   }
 
-  /** 판정 글자 묶음: [판정] / [+점수] / [N개 / 최고 M개(PERFECT 아닐 때)]가 한 덩어리로 움직인다. */
-  private gradeText(r: BreakResult, ev: BreakEvent): void {
-    let size = [62, 50, 40, 44][r.grade];
-    let text: string = t(GRADE_KEYS[r.grade]);
-    if (r.grade === Grade.PERFECT) {
-      size += Math.min(this.perfectStreak - 1, 4) * 3;
-      if (this.perfectStreak >= 2) text = t("GRADE_STREAK_FMT", text, this.perfectStreak);
-    }
+  /** 판 위쪽 줄: 왼쪽 「연쇄 2」(또는 「18칸」), 오른쪽 이번 찍기로 얻은 점수(단계마다 늘어난다). */
+  private stampLine(chain: number, points: number, ev: BreakEvent): void {
+    const col = chainColor(chain);
+    const left = chain > 0 ? t("CHAIN_FMT", chain) : t("CELLS_FMT", ev.counts[0]);
     const lines = [
-      { text, size, color: SKIN.grades[r.grade] },
-      { text: t("POINTS_FMT", r.points), size: 34, color: SKIN.tiers[r.tier] },
+      { text: left, size: 32, color: col },
+      { text: t("POINTS_FMT", points), size: 32, color: col },
     ];
-    if (r.grade !== Grade.PERFECT && r.bestN > 0) lines.push({ text: t("GRADE_SUB", ev.count, r.bestN), size: 26, color: SKIN.text });
     if (this.gradeFloat) this.gradeFloat.alpha = 0;
-    // 판 위쪽 줄의 판정·깬 수·점수는 읽을 시간이 있게 다른 글자보다 두 배 오래 둔다(다음 도장을 찍으면 바로 바뀜)
-    const f = this.float(lines, Math.min(Math.max(ev.ax, 230), 490), ev.ay - 10, false, r.grade, 2);
+    // 다음 도장을 찍으면 바로 바뀐다. 읽을 시간이 있게 다른 글자보다 오래 둔다.
+    const f = this.float(lines, 360, 0, false, chain > 0 ? Pop.BIG : Pop.PLAIN, 2.4);
     f.placement = "grade";
     this.gradeFloat = f;
   }
@@ -1011,11 +1032,11 @@ export class Game {
    * 떠오르는 글자. kind: 판정마다 움직임이 다르다(PERFECT 쾅 / GREAT 튀어나옴 / MISS 흔들리다 떨어짐).
    * stay: 머무르고 사라지는 시간 배율(튀어나오는 순간은 그대로)
    */
-  private float(lines: FloatText["lines"], x: number, y: number, big = false, kind: number = Grade.GOOD, stay = 1): FloatText {
+  private float(lines: FloatText["lines"], x: number, y: number, big = false, kind: number = Pop.PLAIN, stay = 1): FloatText {
     const f: FloatText = { lines, x, y, scale: 1, alpha: 1, dx: 0 };
     this.floats.push(f);
     const tw = this.tweens.add();
-    if (big || kind === Grade.PERFECT) {
+    if (big || kind === Pop.BIG) {
       f.scale = 1.6;
       f.alpha = 0;
       tw.to(0.12, (k) => {
@@ -1027,7 +1048,7 @@ export class Game {
           f.y = y - 70 * k;
           f.alpha = 1 - k;
         }, ease.outCubic);
-    } else if (kind === Grade.GREAT) {
+    } else if (kind === Pop.BOUNCE) {
       f.scale = 1.6;
       tw.to(0.18, (k) => (f.scale = 1.6 - 0.6 * k), ease.outBack)
         .wait(0.12 * stay)
@@ -1035,7 +1056,7 @@ export class Game {
           f.y = y - 80 * k;
           f.alpha = 1 - Math.max(0, (k - 0.2) / 0.8);
         }, ease.outCubic);
-    } else if (kind === Grade.MISS) {
+    } else if (kind === Pop.DROP) {
       tw.to(0.2, (k) => (f.dx = Math.sin(k * Math.PI * 5) * 12 * (1 - k)))
         .to(0.45 * stay, (k) => {
           f.y = y + 50 * k;
@@ -1152,13 +1173,14 @@ export class Game {
 
     if (this.state === "tutorial") {
       if (this.stampLock > 0) this.stampLock = Math.max(0, this.stampLock - dt);
-      this.now.cooldown = this.stampLock / STAMP_COOLDOWN;
+      this.now.cooldown = this.stampLock / this.lockTotal;
     }
+    this.gaugePulse = Math.max(0, this.gaugePulse - realDt * 2.5);
     if (this.state !== "play") return;
     if (this.pauseLock > 0) this.pauseLock = Math.max(0, this.pauseLock - realDt);
-    if (this.rules.tick(dt)) this.breakCombo();
+    if (this.rules.tick(dt)) this.exitFever();
     if (this.stampLock > 0) this.stampLock = Math.max(0, this.stampLock - dt);
-    this.now.cooldown = this.stampLock / STAMP_COOLDOWN;
+    this.now.cooldown = this.stampLock / this.lockTotal;
 
     this.timeWarning();
     if (this.inFever) this.feverFrame(dt);
@@ -1166,7 +1188,7 @@ export class Game {
       this.autoTimer -= dt;
       if (this.autoTimer <= 0 && this.stampLock <= 0) {
         this.autoTimer = 0.35 + Math.random() * 0.55;
-        const mv = bestMove(this.board.model, this.current.cells);
+        const mv = this.bestPlan();
         this.board.setAnchor({ x: mv.x, y: mv.y });
         this.tryPlace({ x: mv.x, y: mv.y });
       }
@@ -1297,38 +1319,40 @@ export class Game {
   }
 
   /**
-   * 위쪽 표시: 상자 없이 큰 숫자와 얇은 선만. 왼쪽 점수 · 가운데 큰 시간 · 오른쪽 최고,
-   * 그 아래 시간 막대와 다음 +1초 목표, 그 아래 콤보·판정 줄(위아래 선 하나씩).
+   * 위쪽 표시: 상자 없이 큰 숫자와 얇은 선만. 왼쪽 점수 · 가운데 최고 · 오른쪽 큰 시간,
+   * 그 아래 왼쪽 끝이 오른쪽으로 줄어드는 시간 막대와 다음 +1초 목표,
+   * 그 아래 피버 게이지 줄과 이번 찍기 결과 줄(위아래 선 하나씩).
    */
   private drawHudPanels(g: CanvasRenderingContext2D): void {
     const r = this.rules;
-    text(g, t("SCORE"), 48, 62, 26, SKIN.score, "left");
-    g.save();
-    const sp = this.scorePulse;
-    g.translate(48, 112); g.scale(sp, sp); g.translate(-48, -112);
-    fitText(g, Math.max(0, r.score - this.hype.pending).toLocaleString(), 48, 132, 56, 210, SKIN.text);
-    g.restore();
-    text(g, t("BEST"), 672, 62, 26, SKIN.muted, "right");
-    fitText(g, Math.max(this.best, 0).toLocaleString(), 672, 126, 36, 190, SKIN.muted, "right");
     // 남은 시간 60·30·10초 기준: 숫자 노랑→주황→빨강, 막대 하늘→보라→빨강
     const tl = Math.max(0, r.timeLeft);
     const danger = tl >= 60 ? 0 : tl >= 30 ? (60 - tl) / 60 : tl >= 10 ? 0.5 + (30 - tl) / 40 : 1;
     const timeCol = danger < 0.5 ? mix(SKIN.timeText, "#ff8c1a", danger * 2) : mix("#ff8c1a", SKIN.warn, (danger - 0.5) * 2);
     const barCol = danger < 0.5 ? mix(SKIN.time, "#b866ff", danger * 2) : mix("#b866ff", SKIN.warn, (danger - 0.5) * 2);
-    text(g, t("TIME"), 360, 40, 24, alpha(SKIN.timeText, 0.8), "center");
+    // 시간은 오른쪽(막대가 오른쪽으로 줄어들어 끝까지 남는 쪽), 점수는 왼쪽
+    text(g, t("TIME"), 672, 62, 26, alpha(SKIN.timeText, 0.8), "right");
     g.save();
-    g.translate(360, 108);
+    g.translate(672, 108);
     const pulse = 1 + (this.timePulse - 1) * 0.5;
     g.scale(pulse, pulse);
-    g.font = font(88);
-    g.textAlign = "center";
+    g.font = font(80);
+    g.textAlign = "right";
     g.textBaseline = "alphabetic";
     g.shadowColor = alpha(timeCol, 0.55);
     g.shadowBlur = 18;
     g.fillStyle = timeCol;
-    g.fillText(tl.toFixed(1), 0, 30);
+    g.fillText(tl.toFixed(1), 0, 28);
     g.restore();
-    // 시간 막대: 얇은 선 하나
+    text(g, t("BEST"), 360, 62, 24, SKIN.muted, "center");
+    fitText(g, Math.max(this.best, 0).toLocaleString(), 360, 124, 32, 170, SKIN.muted, "center");
+    text(g, t("SCORE"), 48, 62, 26, SKIN.score, "left");
+    g.save();
+    const sp = this.scorePulse;
+    g.translate(48, 112); g.scale(sp, sp); g.translate(-48, -112);
+    fitText(g, Math.max(0, r.score - this.hype.pending).toLocaleString(), 48, 132, 56, 230, SKIN.text, "left");
+    g.restore();
+    // 시간 막대: 오른쪽 끝은 고정, 왼쪽 끝이 오른쪽으로 줄어든다
     g.fillStyle = "rgba(64,217,255,0.12)";
     g.fillRect(48, 168, 624, 4);
     const barWidth = 624 * Math.min(1, tl / GAME_TIME);
@@ -1337,30 +1361,33 @@ export class Game {
       g.fillStyle = barCol;
       g.shadowColor = barCol;
       g.shadowBlur = 10;
-      g.fillRect(360 - barWidth / 2, 166, barWidth, 8);
+      g.fillRect(672 - barWidth, 166, barWidth, 8);
+      // 막대 끝의 밝은 점: 어느 쪽으로 줄어드는지 한눈에
+      g.fillStyle = "#ffffff";
+      g.fillRect(672 - barWidth, 164, 4, 12);
       g.restore();
     }
     const timeBonus = this.floats.some((f) => f.placement === "time" && f.alpha > 0.01);
     if (this.state === "play" && !timeBonus) fitText(g, t("TARGET_FMT", r.timeTarget()), 360, 210, 26, 400, "#c0ead5", "center");
 
-    // 콤보·판정 줄: 상자 없이 위아래 얇은 선(피버 땐 분홍)
+    // 피버 게이지 줄: 상자 없이 위아래 얇은 선(피버 땐 분홍)
     const lineCol = this.inFever ? SKIN.tiers[3] : SKIN.muted;
     accentLine(g, 24, 244, 672, lineCol);
     accentLine(g, 24, 380, 672, lineCol);
-    const c = this.comboText;
-    if (c.alpha > 0.01 && c.text) {
+    const fever = this.inFever;
+    const k = fever ? Math.min(1, r.feverLeft / FEVER_TIME) : Math.min(1, r.feverGauge / FEVER_NEED);
+    const gaugeCol = fever ? SKIN.tiers[3] : mix(SKIN.tiers[3], "#ffffff", this.gaugePulse * 0.5);
+    text(g, fever ? t("FEVER") : "FEVER", 48, 300, 24, fever ? SKIN.tiers[3] : alpha(SKIN.text, 0.7), "left");
+    const gx = 210, gw = 462;
+    g.fillStyle = alpha(SKIN.tiers[3], 0.14);
+    g.fillRect(gx, 290, gw, 6);
+    if (k > 0) {
       g.save();
-      g.globalAlpha = c.alpha;
-      g.translate(660, 292);
-      const scale = 1 + (c.scale - 1) * 0.15;
-      g.scale(scale, scale);
-      fitText(g, c.text, 0, 0, 32, 240, c.color, "right");
+      g.fillStyle = gaugeCol;
+      g.shadowColor = SKIN.tiers[3];
+      g.shadowBlur = fever ? 14 : 6 + 12 * this.gaugePulse;
+      g.fillRect(gx, 288, gw * k, 10);
       g.restore();
-      const k = r.combo > 0 ? Math.min(1, r.comboTimer / r.comboWindow) : 0;
-      g.fillStyle = SKIN.tiers[tierFor(r.combo)];
-      g.globalAlpha = c.alpha;
-      g.fillRect(440, 304, 220 * k, 4);
-      g.globalAlpha = 1;
     }
   }
 
@@ -1428,8 +1455,8 @@ export class Game {
       g.save();
       g.translate(0, PLAY_OY);
       g.globalAlpha = Math.max(0, Math.min(1, f.alpha));
-      fitText(g, f.lines[0].text, 48, 349, 32, f.lines.length > 2 ? 250 : 420, f.lines[0].color);
-      fitText(g, f.lines[1].text, 672, 349, 32, 160, f.lines[1].color, "right");
+      fitText(g, f.lines[0].text, 48, 352, 32, 300, f.lines[0].color);
+      fitText(g, f.lines[1].text, 672, 352, 32, 300, f.lines[1].color, "right");
       if (f.lines[2]) fitText(g, f.lines[2].text, 414, 349, 24, 210, SKIN.muted, "center");
       g.restore();
       return;
