@@ -30,11 +30,14 @@ export interface RankView {
   mode: "all" | "mine";
   /** off: 연결 정보 없음 / loading / ready / error */
   status: "off" | "loading" | "ready" | "error";
-  /** 로그인했으면 닉네임("" = 아직 안 정함), 안 했으면 null */
+  /** 계정(손님 포함)이 있으면 닉네임("" = 아직 안 정함), 없으면 null */
   nickname: string | null;
+  /** 손님 계정인지 (Google 로그인 전) */
+  guest: boolean;
   all: LeaderRow[];
   mine: MyRow[];
-  myRank: { rank: number; best: number } | null;
+  /** 닉네임이 없으면 rank 는 null */
+  myRank: { rank: number | null; best: number } | null;
 }
 
 export interface Settings {
@@ -143,7 +146,7 @@ export class Menus {
   result: ResultData | null = null;
   /** 결과 화면 랭킹 한 줄 (Game이 등록 결과에 맞춰 바꾼다) */
   resultRank = "";
-  readonly rank: RankView = { mode: "all", status: "off", nickname: null, all: [], mine: [], myRank: null };
+  readonly rank: RankView = { mode: "all", status: "off", nickname: null, guest: false, all: [], mine: [], myRank: null };
   readonly settings: Settings;
   private panels: Record<PanelId, Panel>;
   private fade = 0;
@@ -181,11 +184,11 @@ export class Menus {
           { kind: "button", y: 30, x: 76, label: () => t("HOW_TO_PLAY"), icon: "help", onPress: () => this.open("howto") },
           { kind: "button", y: 30, x: 644, label: () => t("SETTINGS"), icon: "gear", onPress: () => this.openSettings("title") },
           {
-            // 로그인했으면 메뉴 아래에 내 닉네임과 '닉네임 변경'
+            // 닉네임이 있으면 메뉴 아래에 내 닉네임과 '닉네임 변경' (막 들어온 손님에게는 보이지 않는다)
             kind: "button", y: 956, profile: true, width: 440,
             label: () => t("RANK_EDIT_NAME"), value: () => this.rank.nickname || t("RANK_NICK_UNSET"),
             onPress: () => this.actions.rankNickname(),
-            hidden: () => this.rank.status === "off" || this.rank.nickname === null,
+            hidden: () => this.rank.status === "off" || this.rank.nickname === null || (this.rank.guest && this.rank.nickname === ""),
           },
         ],
         draw: (g) => this.drawTitle(g),
@@ -270,8 +273,10 @@ export class Menus {
             onPress: () => this.actions.rankNickname(), hidden: () => this.rank.nickname === null,
           },
           {
+            // 손님이면 Google 로그인(기록을 계정에 지킨다), Google 계정이면 로그아웃
             kind: "button", y: 972, x: 538, width: 156, small: true,
-            label: () => t("RANK_LOGOUT"), onPress: () => this.actions.rankLogout(),
+            label: () => t(this.rank.guest ? "RANK_LINK" : "RANK_LOGOUT"),
+            onPress: () => (this.rank.guest ? this.actions.rankLogin() : this.actions.rankLogout()),
             hidden: () => this.rank.nickname === null,
           },
           btn(1132, "BACK", () => this.open("title"), true),
@@ -681,7 +686,9 @@ export class Menus {
     // 아래: 내 순위 또는 로그인 안내
     if (rv.status !== "off") {
       accentLine(g, 244, 880, 232, rv.myRank ? SKIN.timeText : SKIN.accent);
-      if (rv.nickname !== null && rv.myRank) {
+      if (rv.nickname !== null && rv.myRank && rv.myRank.rank === null) {
+        wrapText(g, t("RANK_NICK_FIRST"), 360, 926, right - left, 24, 34, SKIN.muted, "center");
+      } else if (rv.nickname !== null && rv.myRank && rv.myRank.rank !== null) {
         ink(t("RANK_MY_PLACE"), left, 926, 23, 120, SKIN.muted, "left");
         ink(t("RANK_PLACE_FMT", rv.myRank.rank), 310, 926, 30, 80, SKIN.timeText, "right", true);
         ink(t("BEST_FMT", rv.myRank.best.toLocaleString()), right, 926, 25, 268, SKIN.timeText);

@@ -1,4 +1,4 @@
-# 점수 검증 서버 함수(submit-run) 배포
+# 서버 함수(submit-run: 점수 검증, merge-guest: 손님 기록 옮기기) 배포
 # 게임 규칙(src/core)이나 서버 함수가 바뀌어 main에 올라오면 규칙 코드를 복사 → 테스트 → Supabase에 배포한다.
 # 관리자 토큰은 GitHub 비밀 설정(SUPABASE_ACCESS_TOKEN)에만 있고, PC에는 두지 않는다.
 # 손으로 다시 배포할 때: GitHub › Actions › Deploy edge function › Run workflow
@@ -47,3 +47,8 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: npx --yes supabase@3.1.0 functions deploy submit-run --remote=brydmjqtutbgphkzsocl --no-verify-jwt --use-api --yes
+      # 손님 기록을 Google 계정으로 옮기는 함수 (두 로그인 토큰을 함수 안에서 직접 확인한다)
+      - name: Deploy merge-guest
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: npx --yes supabase@3.1.0 functions deploy merge-guest --remote=brydmjqtutbgphkzsocl --no-verify-jwt --use-api --yes

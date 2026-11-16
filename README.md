@@ -72,13 +72,29 @@ tools/sim-balance.ts, tools/build-font.py, tools/sync-edge.ts
 4. Authentication → URL Configuration: Site URL = `https://hermitcho.github.io/ShatterStamp-Web/`,
    Redirect URLs 에 위 주소와 `http://localhost:5173/` 를 추가한다.
 5. Project Settings → API 의 Project URL 과 anon(public) 키를 `src/game/online-config.ts` 에 넣는다.
-6. 점수 검증 서버 함수를 배포한다(아래).
+6. 서버 함수(점수 검증 `submit-run`, 손님 기록 옮기기 `merge-guest`)를 배포한다(아래).
+7. 손님 계정(아래 "손님 계정")을 켠다.
+
+### 손님 계정
+
+처음 온 사람은 첫 입력 때 보이지 않게 손님 계정(Supabase 익명 로그인)이 생겨 첫 판부터 기록이 남는다.
+닉네임이 없는 사람의 점수는 랭킹에 보이지 않고, 닉네임을 정하는 순간 보인다. 손님이 Google로 로그인하면
+`merge-guest`가 두 로그인 토큰을 확인한 뒤 손님 기록을 옮기고(Google 계정에 닉네임이 없으면 통째로, 있으면 더 높은 한 판만) 손님 계정을 지운다.
+기록이 없고 30일 동안 안 들어온 손님 계정은 매일 `cleanup_guests`(pg_cron)가 지운다.
+
+1. Authentication → Sign In / Providers → **Allow anonymous sign-ins** 켜기.
+2. Authentication → Rate Limits → 익명 로그인 시간당 횟수(IP당)를 10 정도로 낮추기.
+3. 봇 막기(Cloudflare Turnstile): Cloudflare 대시보드 → Turnstile → 사이트 추가(도메인 `hermitcho.github.io`, `localhost`, 모드 Invisible).
+   - 사이트 키(공개)는 `src/game/online-config.ts`의 `TURNSTILE_SITE_KEY`에 넣는다. CSP는 키가 있을 때만 Cloudflare를 연다.
+   - 비밀 키는 Supabase → Authentication → Attack Protection → CAPTCHA(Turnstile)에만 넣는다. 저장소·채팅에 두지 않는다.
+   - 사이트 키를 넣은 배포가 올라간 **뒤에** Supabase의 CAPTCHA를 켠다(반대로 하면 그 사이 손님 계정을 못 만든다).
+4. 게임이 보내지 못한 판(인터넷 끊김, 창 닫기)은 기기에 맡겨 두고 다음 연결 때 다시 보낸다(판 표 6시간 안, 5번까지).
 
 ### 점수 검증 서버 함수 배포
 
 **자동:** `src/core`(게임 규칙)·`supabase/functions`·`tools/sync-edge.ts`가 바뀌어 main에 올라오면
 GitHub Actions(`.github/workflows/edge.yml`)가 규칙 코드를 복사(`node tools/sync-edge.ts`) → `npm test` →
-`supabase functions deploy submit-run --remote=<프로젝트> --no-verify-jwt --use-api`를 실행한다
+`supabase functions deploy submit-run`·`merge-guest`(`--remote=<프로젝트> --no-verify-jwt --use-api`)를 실행한다
 (로그인 확인은 함수 안에서 직접 하므로 게이트웨이 JWT 검사는 끈다. Docker 없이 서버에서 묶는다. CLI 버전은 고정).
 손으로 다시 배포하려면 GitHub › Actions › Deploy edge function › Run workflow.
 
@@ -89,18 +105,22 @@ GitHub 저장소 › Settings › Secrets and variables › Actions › `SUPABAS
 **게임 규칙(`src/core`)을 바꾸면** `REPLAY_VERSION`을 올린다. 사이트와 서버 함수가 같은 push로 함께 배포된다
 (서버가 옛 규칙으로 계산하면 기록이 거절된다. `npm test`가 복사본이 같은지 확인한다).
 
-연결 정보가 비어 있으면 랭킹은 "준비 중"으로 보이고 게임은 그대로 동작한다. 라이브러리는 로그인 흔적이 있거나 랭킹을 열 때만 받는다.
+연결 정보가 비어 있으면 랭킹은 "준비 중"으로 보이고 게임은 그대로 동작한다. 라이브러리는 로그인 흔적이 있으면 바로, 없으면 첫 입력(손님 계정 만들기) 때 받는다.
 
 ### 보안
 
 - **DB 문은 함수뿐:** 표(`profiles`, `scores`, `runs`)는 RLS를 켜고 권한을 모두 회수해 브라우저가 직접 읽거나 쓸 수 없다.
-  `leaderboard`(누구나), `my_profile`·`set_nickname`·`start_run`·`my_top`·`my_rank`(로그인)만 열려 있고,
+  `leaderboard`(누구나), `my_profile`·`set_nickname`·`start_run`·`my_top`·`my_rank`(로그인, 손님 포함)만 열려 있고,
+  `record_run`·`merge_guest`는 서버 함수만 부를 수 있다.
   누구인지는 함수가 로그인 토큰(`auth.uid()`)에서 꺼낸다. 랭킹에는 닉네임·점수만 나가고 내부 계정 번호는 나가지 않는다.
-- **서버 검사:** 닉네임 2~12자·보이지 않는 글자 금지·대소문자 무시 중복 금지·운영자 사칭 금지·30초에 한 번 변경,
+- **서버 검사:** 닉네임 2~12자·보이지 않는 글자 금지·대소문자 무시 중복 금지·운영자 사칭 금지·부적절한 말 금지(욕설·성적인 말·혐오·차별·마약·자해 등, `nick_blocked`. 띄어쓰기·숫자·바꿔 쓴 글자도 걸림)·30초에 한 번 변경,
   점수·콤보 범위, 하루 300번 등록, 판 표는 2초에 한 번·하루 1000번.
-- **확인:** `schema.sql` 실행 뒤 `supabase/security-test.sql`을 SQL Editor에서 실행하면 방문자·가짜 사용자 3명으로 공격을 흉내 내고
+- **확인:** `schema.sql` 실행 뒤 `supabase/security-test.sql`을 SQL Editor에서 실행하면 방문자·가짜 사용자 3명·손님 1명으로 공격을 흉내 내고
   결과를 표로 보여 준다(시험 데이터는 되돌린다). 모든 `pass`가 true여야 한다.
 - **사이트:** 배포 빌드에 콘텐츠 보안 정책(CSP)을 넣어 우리 파일 밖의 스크립트 실행과 Supabase 밖으로의 통신을 막는다(`vite.config.ts`).
+  예외는 사람 확인(Cloudflare Turnstile)의 스크립트와 확인 칸뿐이다.
+- **문제 기록 숨기기:** SQL Editor에서 `delete from public.scores where user_id = (select id from public.profiles where nickname = '닉네임');`
+  (닉네임만 바꾸게 하려면 `update public.profiles set nickname = '바꿀이름' where nickname = '닉네임';`). 계정째 막으려면 Authentication → Users에서 그 사용자를 지운다.
 - **점수 검증(리플레이):** 브라우저는 점수를 보내지 않는다.
   1. 판을 시작할 때 서버가 예측할 수 없는 시드를 담은 "판 표"(`start_run`)를 준다. 새 표를 받으면 안 쓴 이전 표는 닫힌다.
   2. 게임은 그 시드로 보드·모양 순서를 만들고, 찍기·홀드를 게임 시간과 함께 기록한다.

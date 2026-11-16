@@ -1,7 +1,7 @@
 import { touchUI } from "./device.ts";
 import { bestMove } from "../core/bot.ts";
 import { GAME_TIME, GameRules, Grade, STAMP_COOLDOWN, tierFor, type BreakResult } from "../core/game-rules.ts";
-import { BOARD_COLORS, BOARD_COLS, BOARD_ROWS, localSeed, newBoard, newQueue, REPLAY_VERSION, type ReplayEvent } from "../core/replay.ts";
+import { BOARD_COLORS, BOARD_COLS, BOARD_ROWS, localSeed, newBoard, newQueue, REPLAY_VERSION, type Replay, type ReplayEvent } from "../core/replay.ts";
 import { ShapeQueue } from "../core/shape-queue.ts";
 import type { Cell, Shape } from "../core/shapes.ts";
 import { Sfx } from "./audio.ts";
@@ -25,6 +25,24 @@ export const H = 1280;
 const COLS = BOARD_COLS, ROWS = BOARD_ROWS, COLORS = BOARD_COLORS;
 /** 받아 둔 판 표(시드)를 이 시간이 지나면 버리고 새로 받는다(서버는 6시간 뒤 만료) */
 const TICKET_MAX_AGE = 3 * 3600 * 1000;
+/**
+ * 못 보낸 판(인터넷 끊김, 보내기 전에 창을 닫음)을 기기에 맡겨 두는 곳. 다음에 연결되면 다시 보낸다.
+ * 서버는 판 표를 받은 지 6시간이 지나면 받지 않으므로 조금 앞서 버린다. 5번 실패해도 버린다.
+ */
+const PENDING_KEY = "ss.pending";
+const PENDING_MAX_AGE = 6 * 3600 * 1000 - 5 * 60 * 1000;
+const PENDING_TRIES = 5;
+
+interface PendingRun {
+  run: string;
+  /** 판 표를 받은 시각(ms) */
+  at: number;
+  /** 어느 계정의 판인지 (계정이 바뀌면 그 판 표는 쓸 수 없다) */
+  account: string;
+  score: number;
+  replay: Replay;
+  tries: number;
+}
 /** 플레이 화면 전체를 아래로 내리는 양(아래 안내 상자를 없앤 만큼 위아래 여백을 고르게) */
 export const PLAY_OY = 72;
 /** 판 테두리(보드 밖 12칸 단위)까지 포함해 왼쪽 끝이 위 상자들과 맞도록 */
@@ -136,6 +154,14 @@ export class Game {
   private rankReq = 0;
   /** Google 로그인에서 돌아왔으면 메뉴를 열 때 랭킹 화면부터 보여 준다 */
   private openRankingNext = false;
+  /** 마지막으로 본 계정 (바뀌면 받아 둔 표·최고 점수를 다시 받는다) */
+  private lastAccount: string | null = null;
+  /** 이 페이지에서 손님 계정 만들기를 이미 해 봤는지 (실패해도 계속 다시 묻지 않는다) */
+  private guestTried = false;
+  /** 판 기록을 보내는 중 (그동안 맡겨 둔 판을 또 보내지 않는다) */
+  private submitting = false;
+  /** 닉네임 정하기 창을 이번 접속에서 결과 화면에 띄운 적 있는지 */
+  private askedNick = false;
   /** 다음 판에 쓸 서버 표(시드). 판을 시작할 때 꺼내 쓴다. */
   private nextTicket: RunTicket | null = null;
   private ticketLoading = false;
@@ -203,7 +229,8 @@ export class Game {
       shake: (p) => (this.trauma = Math.min(1, this.trauma + p)),
       rankRefresh: () => void this.refreshRanking(),
       rankLogin: () => void this.online.signIn(),
-      rankLogout: () => void this.online.signOut(),
+      // 로그아웃하면 다음 판부터는 새 손님으로 기록한다
+      rankLogout: () => void this.online.signOut().then(() => this.online.ensureGuest()),
       rankNickname: () => this.editNickname(),
     });
     this.menus.rank.status = this.online.configured ? "ready" : "off";
@@ -235,9 +262,11 @@ export class Game {
     }
   }
 
-  /** 화면에 보여 줄 최고 점수: 로그인했으면 계정 기록, 아니면 이 기기 기록 */
+  /** 화면에 보여 줄 최고 점수: Google 계정이면 계정 기록, 손님이면 계정과 이 기기 중 높은 쪽, 계정이 없으면 이 기기 기록 */
   private get best(): number {
-    return this.online.nickname !== null ? this.accountBest ?? 0 : this.localBest;
+    if (this.online.nickname === null) return this.localBest;
+    if (this.online.guest) return Math.max(this.localBest, this.accountBest ?? 0);
+    return this.accountBest ?? 0;
   }
 
   /** 계정 최고 점수를 서버에서 다시 받는다 */
@@ -272,6 +301,11 @@ export class Game {
    */
   wake(fromCanvas = false): void {
     this.unlockAudio();
+    // 처음 온 사람: 손님 계정을 만들어 첫 판부터 기록이 남게 한다(첫 화면은 가볍게 두려고 첫 입력 뒤에)
+    if (!this.guestTried && !this.autoplay && this.online.configured && this.online.nickname === null) {
+      this.guestTried = true;
+      void this.online.ensureGuest();
+    }
     if (!this.gate) return;
     this.gate = false;
     this.swallowUp = fromCanvas;
@@ -290,13 +324,15 @@ export class Game {
   private onOnlineChange(): void {
     const nick = this.online.nickname;
     // 다른 계정이거나 로그아웃했으면 받아 둔 표는 쓸 수 없다
-    if (nick !== this.menus.rank.nickname) {
+    if (this.online.account !== this.lastAccount) {
+      this.lastAccount = this.online.account;
       this.nextTicket = null;
       // 로그인·로그아웃·계정이 바뀌면 최고 점수도 그 계정 것으로
       this.accountBest = null;
       this.loadAccountBest();
     }
     this.menus.rank.nickname = nick;
+    this.menus.rank.guest = this.online.guest;
     let afterLogin = false;
     try {
       afterLogin = sessionStorage.getItem("ss.afterLogin") === "1";
@@ -309,7 +345,8 @@ export class Game {
       if (this.gate) this.openRankingNext = true;
       else if (this.state === "title") this.menus.openRanking();
     }
-    if (nick === "") this.editNickname();
+    // Google로 처음 로그인했는데 닉네임이 없으면 바로 묻는다(손님은 첫 판이 끝난 뒤에 묻는다)
+    if (nick === "" && !this.online.guest) this.editNickname();
     if (this.menus.current === "ranking") void this.refreshRanking();
     this.prepareRun();
   }
@@ -345,6 +382,14 @@ export class Game {
       (name) => this.online.setNickname(name),
       () => {
         if (this.menus.current === "ranking") void this.refreshRanking();
+        // 결과 화면에서 닉네임을 정했으면 방금 판의 순위를 보여 준다
+        if (this.state === "result" && this.online.nickname) {
+          void this.online.myRank().then((m) => {
+            if (m?.rank && this.state === "result") this.menus.resultRank = t("RESULT_RANK_FMT", m.rank);
+          }).catch(() => {
+            /* 못 받으면 그대로 */
+          });
+        }
       },
     );
   }
@@ -365,30 +410,72 @@ export class Game {
    * (새 표를 받으면 서버가 이전 표를 무효로 하므로, 진행 중인 판의 기록을 못 올리게 된다).
    */
   private prepareRun(): void {
-    if (this.nextTicket || this.ticketLoading || !this.rankable() || !this.online.nickname) return;
+    if (this.nextTicket || this.ticketLoading || this.submitting || !this.rankable() || this.online.nickname === null) return;
     if (this.state !== "title" && this.state !== "result") return;
     this.ticketLoading = true;
-    const owner = this.online.nickname;
-    void this.online.startRun().then((tk) => {
-      this.ticketLoading = false;
-      if (this.online.nickname !== owner) return;
-      if (tk) this.nextTicket = tk;
-      // 너무 빨리 다시 요청해 거절됐을 수 있다: 잠시 뒤 한 번 더
-      else setTimeout(() => this.prepareRun(), 3000);
+    const owner = this.online.account;
+    // 맡겨 둔 판이 있으면 먼저 보낸다(새 표를 받으면 서버가 그 판 표를 닫는다)
+    void this.sendPending().then((clear) => {
+      if (!clear) {
+        this.ticketLoading = false;
+        setTimeout(() => this.prepareRun(), 10_000);
+        return;
+      }
+      return this.online.startRun().then((tk) => {
+        this.ticketLoading = false;
+        if (this.online.account !== owner) return;
+        if (tk) this.nextTicket = tk;
+        // 너무 빨리 다시 요청해 거절됐을 수 있다: 잠시 뒤 한 번 더
+        else setTimeout(() => this.prepareRun(), 3000);
+      });
     });
+  }
+
+  private loadPending(): PendingRun | null {
+    try {
+      const raw = localStorage.getItem(PENDING_KEY);
+      return raw ? (JSON.parse(raw) as PendingRun) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private savePending(p: PendingRun | null): void {
+    try {
+      if (p) localStorage.setItem(PENDING_KEY, JSON.stringify(p));
+      else localStorage.removeItem(PENDING_KEY);
+    } catch {
+      /* 저장 못 하면 다시 보내기만 못 한다 */
+    }
+  }
+
+  /** 맡겨 둔 판을 보낸다. 더 기다릴 것이 없으면(보냈거나 버렸으면) true, 연결이 안 돼 다음에 다시 보내야 하면 false. */
+  private async sendPending(): Promise<boolean> {
+    const p = this.loadPending();
+    if (!p) return true;
+    if (p.account !== this.online.account || Date.now() - p.at > PENDING_MAX_AGE || !p.run || !p.replay) {
+      this.savePending(null);
+      return true;
+    }
+    const res = await this.online.submitRun({ run: p.run, replay: p.replay, score: p.score });
+    if (!res.ok && res.reason === "error" && ++p.tries < PENDING_TRIES) {
+      this.savePending(p);
+      return false;
+    }
+    this.savePending(null);
+    if (res.ok && res.best != null && this.online.account === p.account) {
+      this.accountBest = res.best;
+      if (this.state !== "result") this.menus.best = this.best;
+    }
+    return true;
   }
 
   /** 판이 끝났을 때 랭킹 등록. 서버가 기록을 다시 돌려 계산한 점수만 올라간다. */
   private submitScore(): void {
     this.menus.resultRank = "";
     if (!this.rankable()) return;
-    const nick = this.online.nickname;
-    if (nick === null) {
+    if (this.online.nickname === null) {
       this.menus.resultRank = t("RESULT_RANK_GUEST");
-      return;
-    }
-    if (nick === "") {
-      this.menus.resultRank = t("RESULT_RANK_NICK");
       return;
     }
     const tk = this.ticket;
@@ -401,27 +488,42 @@ export class Game {
     }
     const r = this.rules, run = this.run;
     this.menus.resultRank = t("RESULT_RANK_SAVING");
-    const replay = { v: REPLAY_VERSION, tutorial: this.tutLog, events: this.log };
+    const replay: Replay = { v: REPLAY_VERSION, tutorial: this.tutLog, events: this.log };
+    const account = this.online.account ?? "";
+    // 보내기 전에 기기에 먼저 맡긴다: 연결이 끊기거나 창을 닫아도 다음에 다시 보낸다
+    const pending: PendingRun = { run: tk.id, at: tk.at, account, score: r.score, replay, tries: 0 };
+    this.savePending(pending);
     // 계정 최고 점수는 서버 확인 전에 먼저 반영하고, 등록 결과(서버 계산)로 바로잡는다
     const before = this.accountBest;
     if (this.accountBest !== null && r.score > this.accountBest) this.accountBest = r.score;
+    this.submitting = true;
     void this.online.submitRun({ run: tk.id, replay, score: r.score }).then((res) => {
+      this.submitting = false;
+      const retry = !res.ok && res.reason === "error";
+      if (!retry) this.savePending(null);
       // 기록을 올린 뒤에 다음 판 표를 받는다(먼저 받으면 이번 판 표가 무효가 된다)
       this.prepareRun();
-      if (this.online.nickname !== null) {
+      if (this.online.account === account) {
         if (res.ok && res.best != null) this.accountBest = res.best;
         else if (!res.ok) this.accountBest = before;
         if (this.state !== "result") this.menus.best = this.best;
       }
       if (this.run !== run) return;
       this.menus.resultRank = res.ok
-        ? res.rank ? t("RESULT_RANK_FMT", res.rank) : t("RESULT_RANK_SAVED")
+        ? res.rank ? t("RESULT_RANK_FMT", res.rank)
+          : this.online.nickname === "" ? t("RESULT_RANK_NICK") : t("RESULT_RANK_SAVED")
         : res.reason === "guest" ? t("RESULT_RANK_GUEST")
-        : res.reason === "nickname" ? t("RESULT_RANK_NICK")
         : res.reason === "limit" ? t("RESULT_RANK_LIMIT")
         : res.reason === "rejected" ? t("RESULT_RANK_REJECTED")
         : res.reason === "outdated" ? t("RESULT_RANK_OUTDATED")
-        : res.reason === "off" ? "" : t("RESULT_RANK_FAIL");
+        : res.reason === "off" ? "" : t("RESULT_RANK_PENDING");
+      // 손님의 첫 기록: 결과 화면이 뜬 뒤 닉네임을 한 번 묻는다(취소해도 기록은 남아 있다)
+      if (res.ok && res.rank == null && this.online.nickname === "" && !this.askedNick) {
+        this.askedNick = true;
+        setTimeout(() => {
+          if (this.run === run && this.state === "result" && this.online.nickname === "") this.editNickname();
+        }, 1800);
+      }
     });
   }
 

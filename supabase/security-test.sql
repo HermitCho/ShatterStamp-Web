@@ -1,6 +1,6 @@
 -- Shatter Stamp 보안 자체 점검.
 -- schema.sql 을 실행한 뒤, SQL Editor → New query 에 이 파일 전체를 붙여 넣고 Run.
--- 로그인 안 한 방문자와 가짜 사용자 3명(A, B, C)이 되어 해킹·조작을 시도해 보고, 결과를 표로 보여 준다.
+-- 로그인 안 한 방문자와 가짜 사용자 3명(A, B, C), 손님 1명(G)이 되어 해킹·조작을 시도해 보고, 결과를 표로 보여 준다.
 -- 시험 중에 만든 사용자·닉네임·점수는 마지막에 모두 되돌린다(실제 데이터는 바뀌지 않는다).
 -- 모든 줄의 pass 가 true 여야 한다.
 
@@ -11,6 +11,8 @@ declare
   a uuid := gen_random_uuid();
   b uuid := gen_random_uuid();
   c uuid := gen_random_uuid();
+  g uuid := gen_random_uuid();
+  rg uuid;
   names text[] := '{}';
   wants text[] := '{}';
   gots text[] := '{}';
@@ -25,6 +27,7 @@ begin
       (a, 'authenticated', 'authenticated', 'ss-test-a@example.invalid'),
       (b, 'authenticated', 'authenticated', 'ss-test-b@example.invalid'),
       (c, 'authenticated', 'authenticated', 'ss-test-c@example.invalid');
+    insert into auth.users (id, aud, role, is_anonymous) values (g, 'authenticated', 'authenticated', true);
 
     -- ---------------------------------------------------------- 로그인 안 한 방문자(anon)
     perform set_config('request.jwt.claims', '{"role":"anon"}', true);
@@ -129,7 +132,17 @@ begin
     v := public.set_nickname('a');
     names := names || text 'B: 1글자'; wants := wants || text 'invalid'; gots := gots || v;
     select count(*)::text into v from public.start_run();
-    names := names || text 'B: 닉네임 없이 판 표 받기'; wants := wants || text '0'; gots := gots || v;
+    names := names || text 'B: 닉네임 없이 판 표 받기(기록은 남고 랭킹엔 안 보임)'; wants := wants || text '1'; gots := gots || v;
+    v := public.set_nickname('f u c k 1');
+    names := names || text 'B: 띄어 쓴 영어 욕설'; wants := wants || text 'blocked'; gots := gots || v;
+    v := public.set_nickname('씨1발맨');
+    names := names || text 'B: 숫자 끼운 한국어 욕설'; wants := wants || text 'blocked'; gots := gots || v;
+    v := public.set_nickname('야동왕');
+    names := names || text 'B: 성적인 말'; wants := wants || text 'blocked'; gots := gots || v;
+    v := public.set_nickname('p0rn스타');
+    names := names || text 'B: 숫자로 바꿔 쓴 성적인 말'; wants := wants || text 'blocked'; gots := gots || v;
+    v := public.set_nickname('급식충');
+    names := names || text 'B: 비하하는 말'; wants := wants || text 'blocked'; gots := gots || v;
     v := public.set_nickname('Tester');
     names := names || text 'B: 정상 닉네임'; wants := wants || text 'ok'; gots := gots || v;
     select count(*)::text into v from public.my_top();
@@ -149,6 +162,35 @@ begin
     v := public.set_nickname('tester');
     names := names || text 'C: B와 대소문자만 다른 닉네임'; wants := wants || text 'taken'; gots := gots || v;
     execute 'reset role';
+
+    -- ---------------------------------------------------------- 손님 G (익명 로그인, 닉네임 없음)
+    perform set_config('request.jwt.claims', json_build_object('sub', g, 'role', 'authenticated', 'is_anonymous', true)::text, true);
+    perform set_config('request.jwt.claim.sub', g::text, true);
+    execute 'set local role authenticated';
+    select r.id into rg from public.start_run() r;
+    names := names || text 'G: 손님이 판 표 받기'; wants := wants || text 'ok'; gots := gots || case when rg is null then 'none' else 'ok' end;
+    begin perform public.merge_guest(g, a); v := 'called'; exception when others then v := 'denied'; end;
+    names := names || text 'G: 기록 옮기기 함수 직접 부르기(남의 계정으로)'; wants := wants || text 'denied'; gots := gots || v;
+    begin perform public.cleanup_guests(); v := 'called'; exception when others then v := 'denied'; end;
+    names := names || text 'G: 손님 정리 함수 직접 부르기'; wants := wants || text 'denied'; gots := gots || v;
+    execute 'reset role';
+    update public.runs set created_at = now() - interval '2 minutes' where id = rg;
+    execute 'set local role service_role';
+    select coalesce(r.status, 'null') || '/' || coalesce(r.rank::text, 'no rank') into v from public.record_run(g, rg, 7013, 10, 10, 60) r;
+    names := names || text '서버: 닉네임 없는 손님 기록 등록'; wants := wants || text 'ok/no rank'; gots := gots || v;
+    execute 'reset role';
+    select count(*)::text into v from public.leaderboard(50) l where l.score = 7013;
+    names := names || text '랭킹에 닉네임 없는 손님 기록이 보이나'; wants := wants || text '0'; gots := gots || v;
+    execute 'set local role service_role';
+    v := public.merge_guest(a, b);
+    names := names || text '서버: 손님이 아닌 계정을 옮기기'; wants := wants || text 'not_guest'; gots := gots || v;
+    v := public.merge_guest(g, a);
+    names := names || text '서버: 손님 기록을 A로 옮기기'; wants := wants || text 'ok'; gots := gots || v;
+    execute 'reset role';
+    select m.best::text into v from public.rank_of(a) m;
+    names := names || text 'A: 옮긴 뒤 최고 점수(5000 vs 손님 7013)'; wants := wants || text '7013'; gots := gots || v;
+    select count(*)::text into v from public.scores s where s.user_id = g;
+    names := names || text '옮긴 뒤 손님 쪽에 남은 점수'; wants := wants || text '0'; gots := gots || v;
 
     -- 랭킹 결과에 내부 계정 번호가 나가는지 (함수가 돌려주는 칸 이름 검사)
     select string_agg(p.parameter_name, ',' order by p.ordinal_position) into v

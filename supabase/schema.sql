@@ -21,7 +21,7 @@ alter table public.profiles add column if not exists nickname_changed_at timesta
 
 create table if not exists public.scores (
   id bigint generated always as identity primary key,
-  user_id uuid not null references public.profiles (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
   score integer not null check (score between 0 and 1000000),
   max_combo integer not null check (max_combo between 0 and 500),
   biggest integer not null check (biggest between 0 and 72),
@@ -32,12 +32,19 @@ alter table public.scores alter column user_id drop default;
 -- 판 표: 판을 시작할 때 서버가 내주는 시드. 한 번만 쓸 수 있고, 새 표를 받으면 쓰지 않은 이전 표는 닫힌다.
 create table if not exists public.runs (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references public.profiles (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
   seed integer not null check (seed > 0),
   created_at timestamptz not null default now(),
   closed_at timestamptz
 );
 create index if not exists runs_user_time on public.runs (user_id, created_at desc);
+
+-- 손님(익명 로그인)은 닉네임 없이도 판 표를 받고 점수를 남긴다. 그래서 점수·판 표는 닉네임 표가 아니라 계정에 붙인다.
+-- (예전 버전은 닉네임 표에 붙어 있었다: 바꿔 단다. 닉네임이 없는 사람의 점수는 랭킹에 보이지 않는다.)
+alter table public.scores drop constraint if exists scores_user_id_fkey;
+alter table public.scores add constraint scores_user_id_fkey foreign key (user_id) references auth.users (id) on delete cascade;
+alter table public.runs drop constraint if exists runs_user_id_fkey;
+alter table public.runs add constraint runs_user_id_fkey foreign key (user_id) references auth.users (id) on delete cascade;
 
 -- 어떤 판 표로 올린 점수인지 (한 표로 한 번만)
 alter table public.scores add column if not exists run_id uuid unique references public.runs (id) on delete set null;
@@ -90,7 +97,46 @@ language sql stable security definer set search_path = '' as $$
   select p.nickname from public.profiles p where p.id = auth.uid();
 $$;
 
--- 닉네임 정하기/바꾸기. 결과: ok | invalid | reserved | taken | too_soon | signed_out
+-- 닉네임에 쓸 수 없는 말인지. 여러 온라인 게임에서 막는 종류를 갈래별로 모았다.
+-- 피해 가기를 막으려고 세 가지로 바꿔서 모두 본다.
+--   1) 글자(한글·자모·영어)만 남기기: 띄어쓰기·숫자·기호 끼우기 (f u c k, 씨1발)
+--   2) 숫자·기호를 비슷한 영어 글자로 바꾼 뒤 글자만: p0rn, $ex, b1tch
+--   3) 한글·자모만 남기기: 한글 사이에 영어 끼우기 (씨x발)
+-- 다른 말 안에 우연히 들어가는 짧은 영어(grape의 rape, peacock의 cock, crisis의 isis, heroine의 heroin 등)와
+-- 이름·흔한 말과 겹치는 것(성기, 등신대, 호로록, 에미넴 등)은 넣지 않았다.
+-- sex(?!y): sexy 는 허용한다(뒤에 y가 오지 않는 sex만 막는다).
+-- 단어를 더하려면 아래 목록에 | 로 이어 붙이고 이 파일을 다시 실행한다(이미 정한 닉네임은 바뀌지 않는다).
+create or replace function public.nick_blocked(name text)
+returns boolean
+language plpgsql immutable set search_path = '' as $$
+declare
+  low text := lower(coalesce(name, ''));
+  words text := '(' ||
+    -- 욕설 (한국어)
+    '시발|씨발|씨바|씨빨|시빨|씨팔|시팔|쓰발|ㅅㅂ|ㅆㅂ|ㅅㅍ|병신|븅신|빙신|병쉰|ㅂㅅ|ㅄ|좆|존나|졸라|ㅈㄴ|개새|개색|개세끼|새끼|섀끼|' ||
+    '지랄|ㅈㄹ|염병|엿먹|엿같|느금|니미|애미|애비|씹|썅|쌍년|쌍놈|개년|개놈|후레자식|미친놈|미친년|미친새|또라이|돌아이|닥쳐|꺼져|' ||
+    -- 욕설 (영어)
+    'fuck|fck|phuck|shit|bitch|biatch|cunt|dick|pussy|asshole|bastard|motherf|wanker|twat|bollock|' ||
+    -- 성적인 말 (한국어)
+    '보지|자지|봊|잦|섹스|쎅스|섹파|야동|야설|포르노|자위|딸딸|딸치|오나홀|음경|음란|음부|질싸|질내|정액|펠라|애무|' ||
+    '젖꼭지|젖가슴|유두|빨통|보빨|자빨|조건만남|원나잇|성매매|매춘|창녀|창년|걸레년|성폭|강간|윤간|몰카|도촬|변태|근친|수간|로리콘|쇼타콘|' ||
+    -- 성적인 말 (영어)
+    'sex(?!y)|porn|p0rn|penis|vagina|boob|tits|nipple|orgasm|horny|blowjob|handjob|dildo|jizz|milf|hentai|nude|naked|xxx|nsfw|' ||
+    'slut|whore|hooker|incest|fetish|bdsm|onlyfans|pedophil|pedofil|cocksuck|' ||
+    -- 혐오·차별
+    '김치녀|된장녀|한남충|맘충|급식충|틀딱|노인충|똥꼬충|메갈|워마드|일베|홍어|짱깨|짱개|쪽바리|깜둥|흑형|애자|찐따|장애새|' ||
+    'nigg|nigga|negro|chink|kike|faggot|fag|tranny|retard|' ||
+    -- 극단주의·범죄·마약·자해
+    '나치|히틀러|테러|학살|살인마|자살|자해|마약|필로폰|히로뽕|대마초|코카인|' ||
+    'nazi|hitler|kkk|jihad|terror|suicide|killyourself|cocaine' ||
+    ')';
+begin
+  return regexp_replace(low, '[^a-z가-힣ㄱ-ㅎㅏ-ㅣ]', '', 'g') ~ words
+      or regexp_replace(translate(low, '013457@$!', 'oieastasi'), '[^a-z가-힣ㄱ-ㅎㅏ-ㅣ]', '', 'g') ~ words
+      or regexp_replace(low, '[^가-힣ㄱ-ㅎㅏ-ㅣ]', '', 'g') ~ words;
+end $$;
+
+-- 닉네임 정하기/바꾸기. 결과: ok | invalid | reserved | blocked | taken | too_soon | signed_out
 create or replace function public.set_nickname(name text)
 returns text
 language plpgsql volatile security definer set search_path = '' as $$
@@ -108,6 +154,10 @@ begin
   if lower(replace(clean, ' ', '')) ~ '(admin|운영자|관리자|운영진|관리팀|supabase|system|시스템|official|공식|moderator)' then
     return 'reserved';
   end if;
+  -- 욕설·성적인 말·혐오·차별·마약·자해·범죄 같은 부적절한 말 (nick_blocked)
+  if public.nick_blocked(clean) then
+    return 'blocked';
+  end if;
   select p.nickname_changed_at into last_change from public.profiles p where p.id = uid;
   if last_change is not null and last_change > now() - interval '30 seconds' then
     return 'too_soon';
@@ -124,7 +174,7 @@ end $$;
 -- 예전 점수 등록 함수(브라우저가 점수를 직접 보냄)는 없앤다
 drop function if exists public.submit_score(integer, integer, integer);
 
--- 판 표 받기. 닉네임이 있어야 하고, 2초에 한 번, 하루 1000번까지. 못 받으면 빈 결과.
+-- 판 표 받기. 로그인(손님 포함)만 하면 되고 닉네임은 없어도 된다. 2초에 한 번, 하루 1000번까지. 못 받으면 빈 결과.
 -- 새 표를 받으면 아직 안 쓴 이전 표는 닫는다(여러 표를 받아 두고 좋은 판만 고르기 어렵게).
 create or replace function public.start_run()
 returns table (id uuid, seed integer)
@@ -134,7 +184,7 @@ declare
   new_id uuid;
   new_seed integer;
 begin
-  if uid is null or not exists (select 1 from public.profiles p where p.id = uid) then return; end if;
+  if uid is null then return; end if;
   perform pg_advisory_xact_lock(hashtextextended(uid::text, 0));
   if exists (select 1 from public.runs r where r.user_id = uid and r.created_at > now() - interval '2 seconds') then return; end if;
   if (select count(*) from public.runs r where r.user_id = uid and r.created_at > now() - interval '1 day') >= 1000 then return; end if;
@@ -146,8 +196,23 @@ begin
   return query select new_id, new_seed;
 end $$;
 
+-- 한 사람의 순위와 최고 점수. 순위는 닉네임이 있는 사람끼리만 센다(닉네임이 없으면 rank 는 null).
+-- 다른 함수 안에서만 쓴다(밖에서는 못 부른다).
+create or replace function public.rank_of(p_user uuid)
+returns table (rank bigint, best integer)
+language sql stable security definer set search_path = '' as $$
+  with me as (select max(s.score) as best from public.scores s where s.user_id = p_user),
+       b as (select s.user_id, max(s.score) as best from public.scores s
+             join public.profiles p on p.id = s.user_id group by s.user_id)
+  select case when exists (select 1 from public.profiles p where p.id = p_user)
+              then (select count(*) from b where b.best > me.best) + 1 end,
+         me.best
+  from me where me.best is not null;
+$$;
+
 -- 검증된 한 판 등록. 서버 함수(service_role)만 부를 수 있다. p_duration: 다시 돌려 본 판의 게임 시간(초).
--- 결과 status: ok | no_profile | invalid | bad_run | too_fast | daily_limit (+ rank, best)
+-- 결과 status: ok | no_user | invalid | bad_run | too_fast | daily_limit (+ rank, best)
+-- 닉네임이 없어도 점수는 남긴다(rank 는 null). 닉네임을 정하는 순간 랭킹에 보인다.
 create or replace function public.record_run(p_user uuid, p_run uuid, p_score integer, p_max_combo integer,
                                              p_biggest integer, p_duration double precision)
 returns table (status text, rank bigint, best integer)
@@ -155,8 +220,8 @@ language plpgsql volatile security definer set search_path = '' as $$
 declare
   r record;
 begin
-  if p_user is null or not exists (select 1 from public.profiles p where p.id = p_user) then
-    return query select 'no_profile'::text, null::bigint, null::integer; return;
+  if p_user is null or not exists (select 1 from auth.users u where u.id = p_user) then
+    return query select 'no_user'::text, null::bigint, null::integer; return;
   end if;
   if p_score is null or p_max_combo is null or p_biggest is null or p_duration is null
      or p_score not between 0 and 1000000 or p_max_combo not between 0 and 500 or p_biggest not between 0 and 72
@@ -179,10 +244,7 @@ begin
   end if;
   update public.runs x set closed_at = now() where x.id = p_run;
   insert into public.scores (user_id, run_id, score, max_combo, biggest) values (p_user, p_run, p_score, p_max_combo, p_biggest);
-  return query
-    with b as (select s.user_id, max(s.score) as best from public.scores s group by s.user_id),
-         me as (select b.best from b where b.user_id = p_user)
-    select 'ok'::text, (select count(*) from b where b.best > me.best) + 1, me.best from me;
+  return query select 'ok'::text, m.rank, m.best from public.rank_of(p_user) m;
 end $$;
 
 -- 전체 TOP N: 사람마다 최고 점수 1개. is_me 는 서버가 로그인 토큰으로 판단한다(user_id는 내보내지 않는다).
@@ -212,21 +274,91 @@ language sql stable security definer set search_path = '' as $$
   limit 10;
 $$;
 
--- 내 전체 순위와 최고 점수 (기록이 없거나 로그인 안 했으면 빈 결과)
+-- 내 전체 순위와 최고 점수 (기록이 없거나 로그인 안 했으면 빈 결과, 닉네임이 없으면 rank 는 null)
 create or replace function public.my_rank()
 returns table (rank bigint, best integer)
 language sql stable security definer set search_path = '' as $$
-  with b as (select s.user_id, max(s.score) as best from public.scores s group by s.user_id),
-       me as (select b.best from b where b.user_id = auth.uid())
-  select (select count(*) from b where b.best > me.best) + 1, me.best from me;
+  select m.rank, m.best from public.rank_of(auth.uid()) m;
 $$;
+
+-- 손님 기록을 Google 계정으로 옮기기. 서버 함수(merge-guest)만 부른다. 그 함수가 두 로그인 토큰으로
+-- "이 손님 계정을 가진 사람"이 "이 Google 계정으로 막 로그인한 사람"과 같은 브라우저임을 확인한 뒤에 부른다.
+--   - Google 계정에 닉네임이 없으면(처음 로그인): 손님의 닉네임과 기록을 통째로 넘긴다.
+--   - 이미 닉네임이 있으면: 손님 최고 기록이 더 높을 때만 그 한 판을 옮긴다(높은 쪽이 남는다).
+-- 손님 쪽 나머지(닉네임, 남은 점수, 판 표)는 지운다. 손님 계정 자체는 서버 함수가 지운다.
+-- 결과: ok | not_guest | not_user
+create or replace function public.merge_guest(p_guest uuid, p_user uuid)
+returns text
+language plpgsql volatile security definer set search_path = '' as $$
+declare
+  g_nick text;
+  g_best_id bigint;
+  g_best integer;
+  u_best integer;
+begin
+  if p_guest is null or p_user is null or p_guest = p_user
+     or not exists (select 1 from auth.users u where u.id = p_guest and u.is_anonymous) then
+    return 'not_guest';
+  end if;
+  if not exists (select 1 from auth.users u where u.id = p_user and not u.is_anonymous) then
+    return 'not_user';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(p_guest::text, 0));
+  perform pg_advisory_xact_lock(hashtextextended(p_user::text, 0));
+  select p.nickname into g_nick from public.profiles p where p.id = p_guest;
+  if not exists (select 1 from public.profiles p where p.id = p_user) then
+    delete from public.profiles p where p.id = p_guest;
+    if g_nick is not null then
+      -- 닉네임 변경 간격(30초)에 걸리지 않게 조금 전에 바꾼 것으로 둔다
+      insert into public.profiles (id, nickname, nickname_changed_at) values (p_user, g_nick, now() - interval '1 minute');
+    end if;
+    update public.scores s set user_id = p_user where s.user_id = p_guest;
+  else
+    select s.id, s.score into g_best_id, g_best from public.scores s
+      where s.user_id = p_guest order by s.score desc, s.created_at limit 1;
+    select max(s.score) into u_best from public.scores s where s.user_id = p_user;
+    if g_best_id is not null and g_best > coalesce(u_best, -1) then
+      update public.scores s set user_id = p_user where s.id = g_best_id;
+    end if;
+  end if;
+  delete from public.scores s where s.user_id = p_guest;
+  delete from public.runs r where r.user_id = p_guest;
+  delete from public.profiles p where p.id = p_guest;
+  return 'ok';
+end $$;
+
+-- 오래된 빈 손님 계정 정리: 기록이 하나도 없고 30일 동안 접속하지 않은 손님 계정을 지운다.
+-- 기록이 있는 손님 계정은 지우지 않는다(랭킹에서 이름이 갑자기 사라지지 않게). 매일 한 번 자동 실행(맨 아래 pg_cron).
+create or replace function public.cleanup_guests()
+returns integer
+language plpgsql volatile security definer set search_path = '' as $$
+declare
+  n integer;
+begin
+  delete from auth.users u
+  where u.is_anonymous
+    and u.created_at < now() - interval '30 days'
+    and not exists (select 1 from public.scores s where s.user_id = u.id)
+    and not exists (select 1 from auth.sessions x where x.user_id = u.id
+                    and coalesce(x.updated_at, x.created_at) > now() - interval '30 days');
+  get diagnostics n = row_count;
+  return n;
+end $$;
 
 -- 실행 권한: 기본으로 모두에게 열려 있으므로 먼저 전부 닫고 필요한 만큼만 연다
 revoke all on function public.my_profile(), public.set_nickname(text), public.start_run(),
-  public.record_run(uuid, uuid, integer, integer, integer, double precision),
+  public.record_run(uuid, uuid, integer, integer, integer, double precision), public.rank_of(uuid),
+  public.merge_guest(uuid, uuid), public.cleanup_guests(), public.nick_blocked(text),
   public.leaderboard(integer), public.my_top(), public.my_rank() from public, anon, authenticated;
 grant execute on function public.leaderboard(integer) to anon, authenticated;
 grant execute on function public.my_profile(), public.set_nickname(text), public.start_run(),
   public.my_top(), public.my_rank() to authenticated;
 -- 점수 넣기는 판을 다시 돌려 확인한 서버 함수만 (브라우저의 로그인 사용자도 못 부른다)
 grant execute on function public.record_run(uuid, uuid, integer, integer, integer, double precision) to service_role;
+-- 손님 기록 옮기기도 두 계정을 확인한 서버 함수만
+grant execute on function public.merge_guest(uuid, uuid) to service_role;
+
+-- ------------------------------------------------------------------ 매일 정리 (pg_cron)
+-- 이름이 같은 작업은 덮어쓴다. 매일 04:17(UTC)에 빈 손님 계정을 지운다.
+create extension if not exists pg_cron with schema pg_catalog;
+select cron.schedule('ss-cleanup-guests', '17 4 * * *', 'select public.cleanup_guests()');

@@ -1,17 +1,20 @@
 import { defineConfig, type Plugin } from "vite";
-import { SUPABASE_URL } from "./src/game/online-config.ts";
+import { SUPABASE_URL, TURNSTILE_SITE_KEY } from "./src/game/online-config.ts";
 
 /**
  * 배포용 빌드에만 콘텐츠 보안 정책(CSP)을 넣는다. GitHub Pages는 응답 헤더를 못 바꾸므로 <meta>로 넣는다.
  * - 스크립트는 우리 사이트 파일만 실행한다(끼어든 스크립트·인라인 스크립트 차단 → 로그인 토큰 탈취 방지).
  * - 서버 통신은 우리 사이트와 Supabase 프로젝트로만 보낼 수 있다(데이터를 다른 곳으로 빼돌리지 못하게).
+ * - 예외: 손님 계정을 만들 때 쓰는 사람 확인(Cloudflare Turnstile)의 스크립트와 확인 칸(iframe)만 연다.
  * 개발 서버는 빠른 새로고침(HMR)이 인라인 코드를 써서 넣지 않는다.
  */
 function contentSecurityPolicy(): Plugin {
   const supabase = SUPABASE_URL ? ` ${SUPABASE_URL}` : "";
+  const turnstile = TURNSTILE_SITE_KEY ? " https://challenges.cloudflare.com" : "";
   const policy = [
     "default-src 'self'",
-    "script-src 'self'",
+    `script-src 'self'${turnstile}`,
+    `frame-src${turnstile || " 'none'"}`,
     "style-src 'self' 'unsafe-inline'", // 첫 화면 글꼴·닉네임 입력 창의 <style>
     "img-src 'self' data: blob:",
     "font-src 'self'",
