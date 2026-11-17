@@ -816,11 +816,13 @@ export class Game {
         /* 저장 못 해도 진행 */
       }
     }
+    // 신기록이면 결과 화면의 「최고」도 이번 점수로(서버 확인 전 예전 최고가 보이지 않게)
+    const best = newBest ? r.score : this.best;
     this.menus.result = {
-      score: r.score, best: this.best, newBest, maxChain: r.maxChain,
+      score: r.score, best, newBest, maxChain: r.maxChain,
       chains: r.chainTotal, crystals: r.crystalTotal, time: Math.round(r.bonusTimeTotal), biggest: r.biggest,
     };
-    this.menus.best = this.best;
+    this.menus.best = best;
     this.submitScore();
     const run = this.run;
     this.tweens.add().wait(end.last + 0.55).call(() => {
