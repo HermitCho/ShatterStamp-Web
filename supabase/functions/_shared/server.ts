@@ -4,6 +4,9 @@ import { createClient, type User } from "npm:@supabase/supabase-js@2";
 /** 이 주소에서 연 게임만 브라우저가 응답을 읽을 수 있다 */
 const ALLOWED_ORIGINS = [
   "https://hermitcho.github.io",
+  // itch.io 게임 페이지(게임은 itch.zone 주소의 iframe 안에서 열린다)
+  "https://html-classic.itch.zone",
+  "https://html.itch.zone",
   "http://localhost:5173",
   "http://127.0.0.1:5173",
   "http://localhost:4173",

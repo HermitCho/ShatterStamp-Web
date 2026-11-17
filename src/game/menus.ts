@@ -154,6 +154,8 @@ export class Menus {
   result: ResultData | null = null;
   /** 결과 화면 랭킹 한 줄 (Game이 등록 결과에 맞춰 바꾼다) */
   resultRank = "";
+  /** itch.io처럼 남의 사이트 안(iframe)에서 열리면 Google 로그인 창이 막혀서 손님으로만 쓴다 */
+  readonly googleLogin = !location.hostname.endsWith("itch.zone");
   readonly rank: RankView = { mode: "all", status: "off", nickname: null, guest: false, guestsRanked: true, all: [], mine: [], myRank: null };
   readonly settings: Settings;
   private panels: Record<PanelId, Panel>;
@@ -285,10 +287,10 @@ export class Menus {
           },
           {
             kind: "button", y: 1000, width: 464, label: () => t("RANK_LOGIN"), onPress: () => this.actions.rankLogin(),
-            hidden: () => this.rank.status === "off" || this.rank.nickname !== null,
+            hidden: () => !this.googleLogin || this.rank.status === "off" || this.rank.nickname !== null,
           },
           {
-            kind: "button", y: 972, x: 260, width: 304, profile: true,
+            kind: "button", y: 972, x: this.googleLogin ? 260 : 360, width: 304, profile: true,
             label: () => t("RANK_EDIT_NAME"), value: () => this.rank.nickname || t("RANK_NICK_UNSET"),
             onPress: () => this.actions.rankNickname(), hidden: () => this.rank.nickname === null,
           },
@@ -297,7 +299,7 @@ export class Menus {
             kind: "button", y: 972, x: 538, width: 156, small: true,
             label: () => t(this.rank.guest ? "RANK_LINK" : "RANK_LOGOUT"),
             onPress: () => (this.rank.guest ? this.actions.rankLogin() : this.actions.rankLogout()),
-            hidden: () => this.rank.nickname === null,
+            hidden: () => this.rank.nickname === null || !this.googleLogin,
           },
           btn(1132, "BACK", () => this.open("title"), true),
         ],
