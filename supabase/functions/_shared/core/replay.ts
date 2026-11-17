@@ -1,8 +1,8 @@
 import { BoardModel } from "./board-model.ts";
 import { planMoves } from "./bot.ts";
-import { GAME_TIME, GameRules, STAMP_COOLDOWN } from "./game-rules.ts";
+import { GAME_TIME, GameRules, HOLD_COOLDOWN, MIN_BREAK, STAMP_COOLDOWN } from "./game-rules.ts";
 import { ShapeQueue } from "./shape-queue.ts";
-import type { Shape } from "./shapes.ts";
+import { FEVER_SHAPE, type Shape } from "./shapes.ts";
 
 /**
  * 판 다시 돌리기(리플레이) 검증. 랭킹 점수 조작 방지 2단계.
@@ -14,7 +14,7 @@ import type { Shape } from "./shapes.ts";
  * 이 파일과 같은 폴더의 규칙 코드는 서버(supabase/functions/_shared/core)에 그대로 복사해 쓴다.
  * 규칙을 바꾸면 REPLAY_VERSION을 올리고 서버 함수도 다시 배포해야 한다(README 참고).
  */
-export const REPLAY_VERSION = 2;
+export const REPLAY_VERSION = 3;
 
 export const BOARD_COLS = 8;
 export const BOARD_ROWS = 9;
@@ -99,22 +99,25 @@ export function simulateRun(seed: number, replay: unknown): SimResult {
   const queue = newQueue(seed);
   let current: Shape = queue.pop();
   let held: Shape | null = null;
-  let holdUsed = false;
 
-  /** 게임의 doHold와 같다 */
+  /** 게임의 doHold와 같다(바꾸는 간격은 본 게임 쪽에서 시간으로 검사한다) */
   const hold = (): boolean => {
-    if (holdUsed) return false;
     if (!held) {
       held = current;
       current = queue.pop();
     } else {
       [held, current] = [current, held];
     }
-    holdUsed = true;
     return true;
   };
   /** 게임의 tryPlace → BoardView.placeAt과 같다(도장 → 낙하 → 연쇄를 끝까지). */
-  const stamp = (x: number, y: number, tutorial = false): { counts: number[]; bombs: number } | null | "tutorial" => {
+  const stamp = (x: number, y: number, tutorial = false, fever = false): { counts: number[]; colors: number; crystals: number } | null | "tutorial" => {
+    // 피버: 3×3 도장, 어디든 찍히고 모양 순서(큐·홀드)는 그대로 둔다. 크리스탈은 생기지 않는다.
+    if (fever) {
+      const res = board.resolve(x, y, FEVER_SHAPE.cells, FEVER_SHAPE.cells, false);
+      if (!res) return null;
+      return { counts: res.steps.map((s) => s.broken.length), colors: res.colors, crystals: res.steps.reduce((a, s) => a + s.crystals.length, 0) };
+    }
     const next = queue.peek(1)[0].cells;
     // 튜토리얼은 화살표 자리(점수가 가장 높은 자리, 동점 자리 모두)만 받는다
     if (tutorial) {
@@ -122,11 +125,12 @@ export function simulateRun(seed: number, replay: unknown): SimResult {
       const mine = plans.find((p) => p.x === x && p.y === y);
       if (!mine || mine.points < plans[0].points) return "tutorial";
     }
+    // 본 게임은 MIN_BREAK칸 이상 부서지는 자리만 찍힌다(게임도 그런 찍기는 기록하지 않는다)
+    if (!tutorial && board.stampCount(x, y, current.cells) < MIN_BREAK) return null;
     const res = board.resolve(x, y, current.cells, next);
     if (!res) return null;
     current = queue.pop();
-    holdUsed = false;
-    return { counts: res.steps.map((s) => s.broken.length), bombs: res.steps.reduce((a, s) => a + s.bombs.length, 0) };
+    return { counts: res.steps.map((s) => s.broken.length), colors: res.colors, crystals: res.steps.reduce((a, s) => a + s.crystals.length, 0) };
   };
 
   // 튜토리얼: 점수·시간은 버리지만 보드와 모양 순서는 본 게임으로 이어진다. 최고 자리만 찍을 수 있다.
@@ -142,27 +146,29 @@ export function simulateRun(seed: number, replay: unknown): SimResult {
       if (!res || res === "tutorial") return fail("tutorial");
     }
     held = null;
-    holdUsed = false;
   }
 
   const rules = new GameRules();
   rules.timeLeft = GAME_TIME;
-  let lastStamp = -Infinity;
+  let lastStamp = -Infinity, lastHold = -Infinity;
   for (const e of events) {
     const t = e[1];
     if (t < rules.elapsed - EPS) return fail("order");
     if (t > rules.elapsed) rules.tick(t - rules.elapsed);
     // 게임은 남은 시간이 0이 되는 순간 끝나므로 그 뒤의 입력은 있을 수 없다
     if (rules.timeLeft <= -EPS) return fail("late");
+    const fever = rules.feverAt(t);
     if (e[0] === "h") {
-      if (!hold()) return fail("hold");
+      // 피버 중엔 못 바꾸고, 바꾼 뒤 HOLD_COOLDOWN초 안엔 다시 못 바꾼다
+      if (fever || t - lastHold < HOLD_COOLDOWN - EPS || !hold()) return fail("hold");
+      lastHold = t;
       continue;
     }
     if (t - lastStamp < STAMP_COOLDOWN - EPS) return fail("cooldown");
     lastStamp = t;
-    const res = stamp(e[2], e[3]);
+    const res = stamp(e[2], e[3], false, fever);
     if (!res || res === "tutorial") return fail("empty");
-    rules.registerStamp(res.counts, res.bombs);
+    rules.registerStamp(res.counts, res.colors, res.crystals, t);
   }
   return {
     ok: true,

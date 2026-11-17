@@ -11,7 +11,7 @@ import { t } from "./i18n.ts";
 /** 큰 글자 중심: 판 한가운데(플레이 화면을 내린 만큼 함께) */
 const W = 720, H = 1280, CENTER_Y = 752;
 /** 피버 배지 자리: 보드 위쪽 빈 공간(보드를 가리지 않는다) */
-const BADGE_Y = 280 + 72; // 플레이 화면을 내린 만큼(PLAY_OY)
+const BADGE_Y = 205 + 72; // 시간 막대와 색 줄 사이 빈 줄, 가운데(PLAY_OY만큼 내림)
 const GO_COLOR = "#ffd133";
 
 interface Big {
@@ -194,7 +194,7 @@ export class StageFx {
       if (b.alpha <= 0.01) continue;
       g.save();
       g.globalAlpha = Math.min(1, b.alpha);
-      g.translate(b.badge ? 170 : W / 2, b.y);
+      g.translate(W / 2, b.y);
       g.rotate(b.rot);
       g.scale(b.scale, b.scale);
       if (b.neon !== undefined) neonText(g, b.text, 0, 0, b.size, b.color, b.neon, 0.72, 4);

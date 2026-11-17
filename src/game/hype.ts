@@ -14,7 +14,7 @@ import { ease, Tweens } from "./tween.ts";
 
 interface Banner { text: string; color: string; x: number; a: number; streak: number }
 interface ComboNum { n: number; label: string; x: number; y: number; color: string; scale: number; a: number; dy: number }
-interface Praise { text: string; color: string; scale: number; a: number; rot: number }
+interface Praise { text: string; color: string; scale: number; a: number; rot: number; y: number }
 interface Chip { text: string; color: string; x: number; y: number; scale: number; a: number }
 
 const W = 720;
@@ -40,6 +40,12 @@ export class Hype {
     this.box = box;
     this.scoreAt = scoreAt;
     this.onChip = onChip;
+  }
+
+  /** 지금 떠 있는 연쇄 숫자 자리(없으면 null) */
+  comboAt(): { x: number; y: number } | null {
+    const c = this.combo;
+    return c && c.a > 0.05 ? { x: c.x, y: c.y + c.dy } : null;
   }
 
   /** 날아가는 중인 점수 합(점수판은 이만큼 덜 보여 주다가 도착할 때 채운다) */
@@ -96,7 +102,10 @@ export class Hype {
 
   /** 칭찬 글자: level 0~3 (NICE → AWESOME → AMAZING → INSANE) */
   showPraise(level: number, color: string): void {
-    const p: Praise = { text: PRAISE[Math.min(level, PRAISE.length - 1)], color, scale: 2.1, a: 0, rot: -0.07 };
+    // 판 위쪽 1/3에 띄우되, 연쇄 숫자가 위쪽 절반에 있으면 아래쪽으로 비켜서 숫자를 가리지 않는다
+    const bx = this.box, c = this.combo;
+    const y = c && c.y < bx.y + bx.h * 0.5 ? bx.y + bx.h * 0.74 : bx.y + bx.h * 0.28;
+    const p: Praise = { text: PRAISE[Math.min(level, PRAISE.length - 1)], color, scale: 2.1, a: 0, rot: -0.07, y };
     this.praise = p;
     this.tweens.add()
       .to(0.14, (k) => {
@@ -191,7 +200,7 @@ export class Hype {
     if (p && p.a > 0.01) {
       const bx = this.box;
       g.save();
-      g.translate(bx.x + bx.w / 2, bx.y + bx.h * 0.3);
+      g.translate(bx.x + bx.w / 2, p.y);
       g.rotate(p.rot);
       g.scale(p.scale, p.scale);
       neonText(g, p.text, 0, 0, 84, p.color, p.a, 0.55);

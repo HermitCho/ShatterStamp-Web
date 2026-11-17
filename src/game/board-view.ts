@@ -1,4 +1,4 @@
-import { BoardModel, type Step } from "../core/board-model.ts";
+import { BoardModel, CRYSTAL, CRYSTAL_COL, CRYSTAL_CROSS, type Step } from "../core/board-model.ts";
 import type { Cell } from "../core/shapes.ts";
 import { alpha, mix, SKIN } from "./skin.ts";
 import { ease, Tweens, type Seq } from "./tween.ts";
@@ -22,7 +22,8 @@ class BlockEnt {
   sx = 1;
   sy = 1;
   white = 0;
-  bomb = false;
+  /** 크리스탈 종류(0 = 보통 블록) */
+  crystal = 0;
   seq: Seq | null = null;
   /** seq가 끝나는 시각(이번 찍기 연출 기준). 단계마다 이 뒤에 이어 붙인다. */
   planT = 0;
@@ -47,8 +48,8 @@ export interface StepEvent {
   chain: number;
   count: number;
   broken: Broken[];
-  /** 터진 폭탄 자리와 시각 */
-  bombs: { x: number; y: number; delay: number }[];
+  /** 깨진 크리스탈 자리·시각·종류(화면 좌표). 줄 지우기 빛줄기를 그린다. */
+  crystals: { x: number; y: number; delay: number; kind: number }[];
   /** 이 단계가 터지기 시작하는 시각 */
   at: number;
   /** 글자·점수 조각을 띄울 자리(터지는 칸들의 가운데) */
@@ -60,7 +61,10 @@ export interface BreakEvent {
   /** 전체 부순 칸 수 */
   count: number;
   counts: number[];
-  bombCount: number;
+  /** 여러 색 가짓수(도장과 색 덩어리로 3칸 이상 부순 색)와 그 색들 */
+  colors: number;
+  colorSet: number[];
+  crystalCount: number;
   steps: StepEvent[];
   /** 찍은 칸(화면 좌표) */
   ax: number;
@@ -69,8 +73,8 @@ export interface BreakEvent {
   waveTime: number;
   /** 마지막 블록이 자리 잡기까지(초). 그동안 다음 찍기를 막는다. */
   duration: number;
-  /** 새로 생긴 폭탄(화면 좌표). 연출이 끝날 때 나타난다. */
-  bomb: { x: number; y: number } | null;
+  /** 새로 생긴 크리스탈(화면 좌표와 종류). 연출이 끝날 때 나타난다. */
+  crystal: { x: number; y: number; kind: number } | null;
 }
 
 export interface Preview {
@@ -78,10 +82,6 @@ export interface Preview {
   /** 도장 단계에서 부서질 칸(지금 보드 위치) */
   all: Cell[];
   counts: number[];
-  bombs: number;
-  /** 피버 배율까지 넣은 예상 점수 */
-  points: number;
-  makesBomb: boolean;
 }
 
 export class BoardView {
@@ -94,8 +94,6 @@ export class BoardView {
   nextOffsets: Cell[] = [];
   anchor: Cell | null = null;
   preview: Preview | null = null;
-  /** 단계별 칸 수 → 단계별 점수(게임 규칙이 정한다: 연쇄·피버 배율) */
-  scorer: (counts: number[]) => number[] = (c) => c;
   fever = false;
   /** 0~1: 배경 음악 박자(박 직후 1에서 빠르게 줄어든다). 판 테두리가 숨 쉬듯 밝아진다. */
   beat = 0;
@@ -103,6 +101,14 @@ export class BoardView {
   feverMix = 0;
   /** 미리보기 표시가 피해야 할 자리(화면 좌표, 떠 있는 점수 조각) */
   avoid: { x: number; y: number; w: number; h: number }[] = [];
+  /** 이 칸 수보다 적게 부서지는 자리는 미리보기를 흐리게(안 찍히는 자리). 0이면 제한 없음(튜토리얼·그림). */
+  minBreak = 0;
+  /**
+   * 미리보기 도장 칸 색: "#rrggbb" 고정 색, 또는
+   * "own" 그 칸 블록 제 색 / "own-light" 제 색을 밝게 / "complement" 제 색의 반대색 / "rainbow" 천천히 도는 무지개 /
+   * "own-gold" 제 색 + 안쪽 얇은 금빛 고리
+   */
+  stampColor = "own-light";
   /** 연출이 끝나기까지 남은 시간. 그동안은 미리보기를 숨긴다(보드는 이미 결과 상태라서). */
   busy = 0;
   /** 판 바깥으로 퍼지는 테두리 빛 고리 */
@@ -136,7 +142,7 @@ export class BoardView {
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
         const b = new BlockEnt(this.model.get(x, y), (x + 0.5) * CELL, (y + 0.5) * CELL);
-        b.bomb = model.isBomb(x, y);
+        b.crystal = model.crystalKind(x, y);
         if (animate) {
           b.sx = b.sy = 0;
           b.seq = this.tweens.add().wait(0.025 * (x + y)).to(0.25, (k) => (b.sx = b.sy = k), ease.outBack);
@@ -179,7 +185,7 @@ export class BoardView {
     this.refreshPreview();
   }
 
-  /** 미리보기: 보드 복사본에 실제로 찍어 본다(연쇄·폭탄까지). 난수도 복사하므로 결과가 실제와 같다. */
+  /** 미리보기: 보드 복사본에 실제로 찍어 본다(크리스탈이 지울 줄까지). 난수도 복사하므로 결과가 실제와 같다. */
   refreshPreview(): void {
     if (!this.anchor || this.offsets.length === 0) {
       this.preview = null;
@@ -187,21 +193,18 @@ export class BoardView {
     }
     const { x, y } = this.anchor;
     const info = this.model.computeBreak(x, y, this.offsets);
-    const res = info.stamp.length > 0 ? this.model.clone().resolve(x, y, this.offsets, this.nextOffsets) : null;
+    const res = info.stamp.length > 0 ? this.model.clone().resolve(x, y, this.offsets, this.nextOffsets, !this.fever) : null;
     const counts = res ? res.steps.map((st) => st.broken.length) : [];
     this.preview = {
       stamp: info.stamp,
       all: res ? res.steps[0].broken.map((p) => ({ x: p.x, y: p.y })) : [],
       counts,
-      bombs: res ? res.steps.reduce((n, st) => n + st.bombs.length, 0) : 0,
-      points: this.scorer(counts).reduce((n, v) => n + v, 0),
-      makesBomb: !!res?.bomb,
     };
   }
 
   /** 찍는다(연쇄까지 끝까지). 찍을 블록이 없으면 null. 보드는 바로 결과 상태가 되고, 화면은 단계별로 따라간다. */
   placeAt(cx: number, cy: number): BreakEvent | null {
-    const res = this.model.resolve(cx, cy, this.offsets, this.nextOffsets);
+    const res = this.model.resolve(cx, cy, this.offsets, this.nextOffsets, !this.fever);
     if (!res) return null;
     const { cols } = this.model;
     // 지난 연출이 남아 있으면 끝 상태로 맞추고 새로 짠다
@@ -224,20 +227,32 @@ export class BoardView {
       at = ev.settle + CHAIN_PAUSE;
     }
     const duration = at - CHAIN_PAUSE;
-    let bomb: BreakEvent["bomb"] = null;
-    if (res.bomb) {
-      const b = this.blocks[res.bomb.y * cols + res.bomb.x]!;
-      const [bx, by] = this.toScreen(res.bomb.x, res.bomb.y);
-      bomb = { x: bx, y: by };
-      this.tweens.add().wait(duration).call(() => (b.bomb = true));
+    let crystal: BreakEvent["crystal"] = null;
+    if (res.crystal) {
+      const { x, y, kind } = res.crystal;
+      const b = this.blocks[y * cols + x]!;
+      const [bx, by] = this.toScreen(x, y);
+      crystal = { x: bx, y: by, kind };
+      // 연출이 끝날 때 찍은 자리의 블록이 크리스탈로 바뀐다(살짝 튀어 오르며)
+      this.tweens.add().wait(duration).call(() => {
+        b.color = CRYSTAL;
+        b.crystal = kind;
+        b.white = 1;
+      }).to(0.25, (k) => {
+        b.white = 1 - k;
+        b.sx = b.sy = 1 + 0.25 * Math.sin(k * Math.PI);
+      });
     }
     this.busy = duration;
-    this.preview = null;
+    // 피버 땐 연출 중에도 다음 3×3 자리를 바로 보여 준다(연달아 찍으라고)
+    if (this.fever) this.refreshPreview();
+    else this.preview = null;
     const [ax, ay] = this.toScreen(cx, cy);
     const counts = res.steps.map((st) => st.broken.length);
     return {
-      count: counts.reduce((n, v) => n + v, 0), counts, bombCount: steps.reduce((n, st) => n + st.bombs.length, 0),
-      steps, ax, ay, waveTime, duration, bomb,
+      count: counts.reduce((n, v) => n + v, 0), counts, colors: res.colors, colorSet: res.colorSet,
+      crystalCount: steps.reduce((n, st) => n + st.crystals.length, 0),
+      steps, ax, ay, waveTime, duration, crystal,
     };
   }
 
@@ -261,9 +276,9 @@ export class BoardView {
       this.pop(b, delay);
       this.blocks[i] = null;
     }
-    const bombs = st.bombs.map((p) => {
+    const crystals = st.crystals.map((p) => {
       const [x, y] = this.toScreen(p.x, p.y);
-      return { x, y, delay: at + (depth.get(p.y * cols + p.x) ?? 0) * step };
+      return { x, y, delay: at + (depth.get(p.y * cols + p.x) ?? 0) * step, kind: p.kind };
     });
     const waveEnd = at + maxD * step;
     let settle = waveEnd + 0.1;
@@ -283,7 +298,7 @@ export class BoardView {
     }
     const n = Math.max(1, st.broken.length);
     return {
-      event: { chain: st.chain, count: st.broken.length, broken, bombs, at, cx: sumX / n, cy: sumY / n },
+      event: { chain: st.chain, count: st.broken.length, broken, crystals, at, cx: sumX / n, cy: sumY / n },
       waveEnd,
       settle,
     };
@@ -438,9 +453,8 @@ export class BoardView {
     g.beginPath();
     g.rect(-12, -12, w + 24, h + 24);
     g.clip();
-    const pulse = 0.5 + 0.5 * Math.sin(this.clock * 6);
-    for (const b of this.blocks) if (b) drawBlock(g, b, pulse);
-    for (const b of this.dying) drawBlock(g, b, pulse);
+    for (const b of this.blocks) if (b) drawBlock(g, b, this.clock);
+    for (const b of this.dying) drawBlock(g, b, this.clock);
     g.restore();
     this.drawPreview(g);
     g.restore();
@@ -455,57 +469,164 @@ export class BoardView {
     const cols = this.model.cols;
     g.save();
     g.globalCompositeOperation = "lighter";
-    g.globalAlpha = 0.32 + 0.12 * Math.sin(this.clock * 3.3);
+    g.globalAlpha = 0.46 + 0.16 * Math.sin(this.clock * 3.3);
     for (const p of cells) {
       const blk = this.blocks[p.y * cols + p.x];
-      if (blk) drawBlock(g, blk, 0);
+      if (blk) drawBlock(g, blk, this.clock);
     }
     g.restore();
   }
 
   private drawPreview(g: CanvasRenderingContext2D): void {
     const pv = this.preview;
-    if (!pv || !this.anchor || this.busy > 0) return;
+    if (!pv || !this.anchor || (this.busy > 0 && !this.fever)) return;
+    this.drawBreakArea(g, pv.all, this.anchor, this.offsets, pv.all.length < this.minBreak);
+  }
+
+  /**
+   * 부서질 자리 표시(게임 미리보기와 게임 방법 그림이 함께 쓴다):
+   * 밖은 어둡게, 이어져 함께 부서질 칸은 색 덩어리마다 제 색 윤곽선만, 도장 칸은 제 색을 밝게 + 빛줄기·별빛.
+   * weak(너무 작아 안 찍히는 자리)면 흐린 회색 점선만.
+   */
+  drawBreakArea(g: CanvasRenderingContext2D, all: readonly Cell[], anchor: Cell, offsets: readonly Cell[], weak: boolean): void {
     const { cols, rows } = this.model;
-    const inside = new Set(pv.all.map((p) => p.y * cols + p.x));
+    const inside = new Set(all.map((p) => p.y * cols + p.x));
     const has = (x: number, y: number) => x >= 0 && y >= 0 && x < cols && y < rows && inside.has(y * cols + x);
 
+    // 너무 작은 자리: 빛나지 않고, 흐린 회색 점선 윤곽만
     g.fillStyle = SKIN.dim;
     for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) if (!inside.has(y * cols + x)) g.fillRect(x * CELL, y * CELL, CELL, CELL);
-    this.glowCells(g, pv.all);
-    const outline = (path: () => void, w: number, c: string) => {
-      g.lineWidth = w;
-      g.strokeStyle = c;
+    if (weak) {
+      g.save();
+      g.lineCap = "square";
+      g.setLineDash([10, 8]);
+      g.lineWidth = 3;
+      g.strokeStyle = "rgba(160,160,185,0.6)";
       g.beginPath();
-      path();
-      g.stroke();
-    };
-    const edges = () => {
-      for (const p of pv.all) {
+      for (const p of all) {
         const x = p.x * CELL, y = p.y * CELL;
         if (!has(p.x, p.y - 1)) seg(g, x, y, x + CELL, y);
         if (!has(p.x, p.y + 1)) seg(g, x, y + CELL, x + CELL, y + CELL);
         if (!has(p.x - 1, p.y)) seg(g, x, y, x, y + CELL);
         if (!has(p.x + 1, p.y)) seg(g, x + CELL, y, x + CELL, y + CELL);
       }
+      g.stroke();
+      g.setLineDash([]);
+      g.lineWidth = 3;
+      g.strokeStyle = "rgba(255,255,255,0.3)";
+      for (const o of offsets) {
+        const x = anchor.x + o.x, y = anchor.y + o.y;
+        if (!this.model.inBounds(x, y)) continue;
+        roundRect(g, x * CELL + 8, y * CELL + 8, CELL - 16, CELL - 16, 10);
+        g.stroke();
+      }
+      g.restore();
+      return;
+    }
+    // 이어져서 함께 부서질 칸은 빛내지 않는다(도장 칸이 묻히지 않게): 색 윤곽선만
+    // 윤곽: 색 덩어리마다 그 색의 선(같은 색끼리만 한 덩어리로 묶는다)
+    const colorAt = (x: number, y: number) => this.blocks[y * cols + x]?.color ?? -1;
+    const same = (x: number, y: number, c: number) => has(x, y) && colorAt(x, y) === c;
+    const edgesOf = (c: number) => {
+      for (const p of all) {
+        if (colorAt(p.x, p.y) !== c) continue;
+        const x = p.x * CELL, y = p.y * CELL;
+        if (!same(p.x, p.y - 1, c)) seg(g, x, y, x + CELL, y);
+        if (!same(p.x, p.y + 1, c)) seg(g, x, y + CELL, x + CELL, y + CELL);
+        if (!same(p.x - 1, p.y, c)) seg(g, x, y, x, y + CELL);
+        if (!same(p.x + 1, p.y, c)) seg(g, x + CELL, y, x + CELL, y + CELL);
+      }
     };
-    g.lineCap = "square";
-    outline(edges, 8, "rgba(0,0,8,0.8)");
-    outline(edges, 3, "rgba(220,226,240,0.85)");
+    const groupColors = [...new Set(all.map((p) => colorAt(p.x, p.y)))].filter((c) => c >= 0);
+    const pulse = 0.75 + 0.25 * Math.sin(this.clock * 3.3);
+    g.save();
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    for (const c of groupColors) {
+      const col = blockColor(c);
+      g.beginPath();
+      edgesOf(c);
+      g.lineWidth = 8;
+      g.strokeStyle = "rgba(0,0,8,0.75)";
+      g.stroke();
+      g.lineWidth = 3;
+      g.strokeStyle = alpha(col, 0.85);
+      g.stroke();
+    }
+    g.restore();
     // 찍는 칸: 흰 빛 칸 + 굵은 흰 테두리(보드 밖 칸은 흐린 점선)
-    for (const o of this.offsets) {
-      const x = this.anchor.x + o.x, y = this.anchor.y + o.y;
+    for (const o of offsets) {
+      const x = anchor.x + o.x, y = anchor.y + o.y;
       const inBoard = this.model.inBounds(x, y);
       g.save();
       if (inBoard) {
-        g.fillStyle = "rgba(255,255,255,0.22)";
+        // 도장 칸: 흰색 대신 색 빛 칸 + 굵은 네온 테두리(숨쉬기에 맞춰 빛 번짐)
+        const blk = this.blocks[y * cols + x];
+        const own = blk ? blockColor(blk.color) : "#ff47d9";
+        const mode = this.stampColor;
+        const sc = mode === "own" || mode === "own-gold" ? own
+          : mode === "own-light" ? mix(own, "#ffffff", 0.45)
+          : mode === "complement" ? complement(own)
+          : mode === "rainbow" ? hsl(((this.clock * 0.25 + (x + y) * 0.08) % 1) * 360, 95, 66)
+          : mode;
+        g.fillStyle = alpha(sc, 0.2);
         roundRect(g, x * CELL + 5, y * CELL + 5, CELL - 10, CELL - 10, 12);
         g.fill();
-        g.shadowColor = "rgba(255,255,255,0.9)";
-        g.shadowBlur = 14;
+        g.shadowColor = sc;
+        g.shadowBlur = 12 + 6 * pulse;
         g.lineWidth = 6;
-        g.strokeStyle = "#ffffff";
+        g.strokeStyle = mix(sc, "#ffffff", 0.15);
         g.stroke();
+        // 반짝: 비스듬한 빛줄기가 도장 칸을 차례로 훑고(1.4초마다, 칸마다 조금씩 늦게), 작은 별빛이 자주 켜진다
+        {
+          const i = offsets.indexOf(o);
+          const ph = (this.clock / 1.4 - i * 0.09) % 1, k = ph < 0 ? ph + 1 : ph;
+          if (k < 0.35) {
+            const t = k / 0.35, cx0 = x * CELL, cy0 = y * CELL;
+            g.save();
+            roundRect(g, cx0 + 5, cy0 + 5, CELL - 10, CELL - 10, 12);
+            g.clip();
+            g.globalCompositeOperation = "lighter";
+            g.shadowBlur = 0;
+            const bx = cx0 - CELL * 0.6 + CELL * 2.2 * t;
+            const grad = g.createLinearGradient(bx - 22, cy0, bx + 22, cy0 + 10);
+            grad.addColorStop(0, "rgba(255,255,255,0)");
+            grad.addColorStop(0.5, alpha(mix(sc, "#ffffff", 0.6), 0.75 * Math.sin(t * Math.PI)));
+            grad.addColorStop(1, "rgba(255,255,255,0)");
+            g.fillStyle = grad;
+            g.beginPath();
+            g.moveTo(bx - 16, cy0); g.lineTo(bx + 30, cy0); g.lineTo(bx + 4, cy0 + CELL); g.lineTo(bx - 42, cy0 + CELL);
+            g.fill();
+            g.restore();
+          }
+          const tw = (this.clock / 0.9 + cellHash(x + 7, y + 3)) % 1;
+          if (tw < 0.3) {
+            const kk = Math.sin((tw / 0.3) * Math.PI), r = 11 * kk;
+            const sx = x * CELL + CELL * 0.72, sy = y * CELL + CELL * 0.28;
+            g.save();
+            g.globalCompositeOperation = "lighter";
+            g.globalAlpha = kk;
+            g.fillStyle = mix(sc, "#ffffff", 0.7);
+            g.shadowColor = sc;
+            g.shadowBlur = 10;
+            g.beginPath();
+            g.moveTo(sx, sy - r);
+            g.quadraticCurveTo(sx, sy, sx + r, sy);
+            g.quadraticCurveTo(sx, sy, sx, sy + r);
+            g.quadraticCurveTo(sx, sy, sx - r, sy);
+            g.quadraticCurveTo(sx, sy, sx, sy - r);
+            g.fill();
+            g.restore();
+          }
+        }
+        if (mode === "own-gold") {
+          g.shadowColor = "#ffc733";
+          g.shadowBlur = 8;
+          g.lineWidth = 2.5;
+          g.strokeStyle = "#ffd866";
+          roundRect(g, x * CELL + 14, y * CELL + 14, CELL - 28, CELL - 28, 8);
+          g.stroke();
+        }
       } else {
         g.setLineDash([8, 8]);
         g.lineWidth = 3;
@@ -516,6 +637,27 @@ export class BoardView {
       g.restore();
     }
   }
+}
+
+/** 반대색(색상환에서 180도) */
+function complement(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, gg = (n >> 8) & 255, b = n & 255;
+  const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
+  return "#" + [r, gg, b].map((v) => (mx + mn - v).toString(16).padStart(2, "0")).join("");
+}
+
+function hsl(h: number, s: number, l: number): string {
+  // #rrggbb로(mix·alpha가 #색만 받는다)
+  const k = (n: number) => (n + h / 30) % 12, a = (s / 100) * Math.min(l / 100, 1 - l / 100);
+  const f = (n: number) => Math.round(255 * (l / 100 - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))));
+  return "#" + [f(0), f(8), f(4)].map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+
+/** 칸마다 정해진 0~1 값(반짝임이 칸마다 다른 때에 뜨게) */
+function cellHash(x: number, y: number): number {
+  const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return h - Math.floor(h);
 }
 
 function seg(g: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number): void {
@@ -616,38 +758,87 @@ function symbol(g: CanvasRenderingContext2D, color: number): void {
   g.fill();
 }
 
-/** 폭탄 표시: 흰 빛 고리 + 네 방향 불꽃. pulse 0~1로 숨 쉰다. */
-export function drawBombMark(g: CanvasRenderingContext2D, x: number, y: number, r: number, pulse: number): void {
+/** 블록 그림 하나를 (x, y)에 size 크기로 그린다(화면 위쪽 색 줄 같은 작은 표시용). */
+export function drawBlockIcon(g: CanvasRenderingContext2D, color: number, x: number, y: number, size: number): void {
+  const s = (size * (BLOCK + PAD * 2)) / BLOCK;
+  g.drawImage(blockSprite(color), x - s / 2, y - s / 2, s, s);
+}
+
+/** 블록 색(크리스탈은 흰빛). 조각·빛 효과 색에 쓴다. */
+export function blockColor(color: number): string {
+  return color === CRYSTAL ? "#e8f6ff" : SKIN.blocks[color];
+}
+
+/**
+ * 크리스탈: 어두운 칸 + 무지개빛으로 도는 테두리 + 가운데 흰 보석, 지울 방향 화살표(가로줄 ◀▶, 십자는 네 방향).
+ * half: 칸 반지름, t: 시계(초)
+ */
+export function drawCrystal(g: CanvasRenderingContext2D, x: number, y: number, half: number, kind: number, t: number): void {
   g.save();
   g.translate(x, y);
-  g.shadowColor = "rgba(255,255,255,0.9)";
-  g.shadowBlur = 6 + 10 * pulse;
-  g.strokeStyle = "#ffffff";
-  g.lineWidth = r * 0.22;
-  g.beginPath();
-  g.arc(0, 0, r, 0, Math.PI * 2);
+  const hue = (t * 70) % 360;
+  roundRect(g, -half, -half, half * 2, half * 2, half * 0.3);
+  // 속: 무지개빛이 은은히 도는 유리
+  const glass = g.createRadialGradient(0, -half * 0.3, half * 0.1, 0, 0, half * 1.2);
+  glass.addColorStop(0, `hsla(${(hue + 180) % 360},90%,70%,0.45)`);
+  glass.addColorStop(1, "rgba(20,18,42,0.95)");
+  g.fillStyle = glass;
+  g.fill();
+  const edge = g.createLinearGradient(-half, -half, half, half);
+  edge.addColorStop(0, `hsl(${hue},95%,72%)`);
+  edge.addColorStop(0.5, `hsl(${(hue + 120) % 360},95%,72%)`);
+  edge.addColorStop(1, `hsl(${(hue + 240) % 360},95%,72%)`);
+  g.shadowColor = `hsla(${hue},95%,75%,0.8)`;
+  g.shadowBlur = 14;
+  g.lineWidth = half * 0.14;
+  g.strokeStyle = edge;
   g.stroke();
-  g.fillStyle = "#ffffff";
-  for (let i = 0; i < 4; i++) {
-    g.rotate(Math.PI / 2);
+  g.shadowBlur = 0;
+  // 가운데 보석(마름모, 위쪽이 밝게)
+  const r = half * 0.55;
+  const gem = g.createLinearGradient(0, -r, 0, r);
+  gem.addColorStop(0, "#ffffff");
+  gem.addColorStop(1, `hsl(${(hue + 60) % 360},80%,78%)`);
+  g.fillStyle = gem;
+  g.shadowColor = "rgba(255,255,255,0.9)";
+  g.shadowBlur = 8 + 4 * Math.sin(t * 5);
+  g.beginPath();
+  g.moveTo(0, -r);
+  g.lineTo(r * 0.8, 0);
+  g.lineTo(0, r);
+  g.lineTo(-r * 0.8, 0);
+  g.closePath();
+  g.fill();
+  g.shadowBlur = 0;
+  // 지울 방향 화살표
+  g.fillStyle = "rgba(255,255,255,0.9)";
+  // 가로줄: 좌우, 세로줄: 위아래, 십자: 네 방향
+  const angles = kind === CRYSTAL_CROSS ? [0, 1, 2, 3] : kind === CRYSTAL_COL ? [1, 3] : [0, 2];
+  for (const q of angles) {
+    g.save();
+    g.rotate((q * Math.PI) / 2);
+    const ax = half * 0.62 + Math.sin(t * 4) * half * 0.05;
     g.beginPath();
-    g.moveTo(-r * 0.2, -r * 1.1);
-    g.lineTo(0, -r * (1.55 + 0.2 * pulse));
-    g.lineTo(r * 0.2, -r * 1.1);
+    g.moveTo(ax + half * 0.26, 0);
+    g.lineTo(ax, -half * 0.2);
+    g.lineTo(ax, half * 0.2);
+    g.closePath();
     g.fill();
+    g.restore();
   }
   g.restore();
 }
 
-function drawBlock(g: CanvasRenderingContext2D, b: BlockEnt, pulse: number): void {
+function drawBlock(g: CanvasRenderingContext2D, b: BlockEnt, t: number): void {
   if (b.sx <= 0.001) return;
-  const spr = blockSprite(b.color);
-  const s = BLOCK + PAD * 2;
   g.save();
   g.translate(b.x, b.y);
   g.scale(b.sx, b.sy);
-  g.drawImage(spr, -s / 2, -s / 2, s, s);
-  if (b.bomb) drawBombMark(g, 0, 0, 22, pulse);
+  if (b.crystal) drawCrystal(g, 0, 0, BLOCK / 2 - 3, b.crystal, t);
+  else {
+    const s = BLOCK + PAD * 2;
+    g.drawImage(blockSprite(b.color), -s / 2, -s / 2, s, s);
+  }
   if (b.white > 0) {
     g.globalAlpha = b.white * 0.8;
     g.fillStyle = "#fff";

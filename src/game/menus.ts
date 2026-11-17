@@ -54,9 +54,9 @@ export interface ResultData {
   newBest: boolean;
   /** 한 번 찍어 낸 가장 긴 연쇄 */
   maxChain: number;
-  /** 이번 판 전체 연쇄 수 / 터뜨린 폭탄 수 */
+  /** 이번 판 전체 연쇄 수 / 깬 크리스탈 수 */
   chains: number;
-  bombs: number;
+  crystals: number;
   time: number;
   biggest: number;
 }
@@ -79,6 +79,9 @@ export interface MenuActions {
 }
 
 /** 결과 연출 진행 상태(값은 0~1 또는 지금 보이는 숫자) */
+/** 결과 기록 줄이 내려앉는 거리(위에서 아래로 나타난다) */
+const DROP = 28;
+
 interface ResultAnim {
   running: boolean;
   title: number;
@@ -89,7 +92,7 @@ interface ResultAnim {
   /** 새 최고 기록 도장(0~1 찍히는 정도, 크기) */
   stamp: number;
   stampScale: number;
-  rows: { a: number; dx: number; values: number[] }[];
+  rows: { a: number; dy: number; values: number[] }[];
   buttons: number;
 }
 
@@ -208,7 +211,7 @@ export class Menus {
           },
           {
             kind: "button", y: 1150, x: 214, width: 260, label: () => t("HOWTO_PREV"), onPress: () => this.howtoPage(this.howto.page - 1),
-            hidden: () => this.howto.page !== 1,
+            hidden: () => this.howto.page === 0 || this.howto.page === HOWTO_PAGES - 1,
           },
           {
             kind: "button", y: 1150, x: 214, width: 260, label: () => t("TUTORIAL_BTN"), onPress: () => this.actions.tutorial(),
@@ -578,10 +581,10 @@ export class Menus {
   private playResult(): void {
     const r = this.result;
     if (!r) return;
-    const targets = [[r.maxChain], [r.chains, r.bombs], [r.time], [r.biggest]];
+    const targets = [[r.maxChain], [r.chains, r.crystals], [r.time], [r.biggest]];
     const an: ResultAnim = {
       running: true, title: 0, score: 0, scoreA: 0, scoreScale: 1, best: 0, stamp: 0, stampScale: 1,
-      rows: targets.map((v) => ({ a: 0, dx: 180, values: v.map(() => 0) })), buttons: 0,
+      rows: targets.map((v) => ({ a: 0, dy: -DROP, values: v.map(() => 0) })), buttons: 0,
     };
     this.anim = an;
     const snd = this.actions.sound;
@@ -609,16 +612,25 @@ export class Menus {
         this.actions.shake(0.5);
       });
     }
-    seq.wait(0.3);
-    an.rows.forEach((row, i) => {
-      seq.call(() => snd("pop", 1 + i * 0.12, -4)).to(0.2, (k) => {
-        row.a = Math.min(1, k * 1.6);
-        row.dx = 180 * (1 - ease.outCubic(k));
-      });
-      const has = targets[i].some((v) => v > 0);
-      seq.to(0.4, this.counter(0.4, (e) => (row.values = targets[i].map((v) => Math.round(v * e))), has))
-        .call(() => (row.values = targets[i].slice()))
-        .wait(0.1);
+    seq.wait(0.25);
+    // 위에서 아래로, 하나씩 끝까지: 최대 연쇄 → 얻은 시간 → 최대 파괴(윗줄 왼쪽부터) → 아랫줄 연쇄·크리스탈.
+    // 하나가 살짝 위에서 내려앉고 숫자가 다 올라간 뒤에 다음 것이 나온다.
+    const LINES = [[0], [2], [3], [1]];
+    LINES.forEach((line, li) => {
+      seq.call(() => {
+        snd("pop", 1 + li * 0.15, -4);
+        line.forEach((i, j) => {
+          const row = an.rows[i];
+          this.tweens.add().wait(j * 0.07).to(0.24, (k) => {
+            row.a = Math.min(1, k * 1.6);
+            row.dy = -DROP * (1 - ease.outCubic(k));
+          });
+        });
+      }).wait(0.2 + (line.length - 1) * 0.07);
+      const has = line.some((i) => targets[i].some((v) => v > 0));
+      seq.to(0.4, this.counter(0.4, (e) => line.forEach((i) => (an.rows[i].values = targets[i].map((v) => Math.round(v * e)))), has))
+        .call(() => line.forEach((i) => (an.rows[i].values = targets[i].slice())))
+        .wait(0.08);
     });
     seq.to(0.25, (k) => (an.buttons = k), ease.outCubic).call(() => (an.running = false));
   }
@@ -642,8 +654,8 @@ export class Menus {
     if (!r || !an) return;
     this.tweens.clear();
     Object.assign(an, { running: false, title: 1, score: r.score, scoreA: 1, scoreScale: 1, best: 1, stamp: r.newBest ? 1 : 0, stampScale: 1, buttons: 1 });
-    const targets = [[r.maxChain], [r.chains, r.bombs], [r.time], [r.biggest]];
-    an.rows.forEach((row, i) => Object.assign(row, { a: 1, dx: 0, values: targets[i].slice() }));
+    const targets = [[r.maxChain], [r.chains, r.crystals], [r.time], [r.biggest]];
+    an.rows.forEach((row, i) => Object.assign(row, { a: 1, dy: 0, values: targets[i].slice() }));
   }
 
   private drawRanking(g: CanvasRenderingContext2D): void {
@@ -782,14 +794,14 @@ export class Menus {
     const statX = [160, 0, 360, 560];
     an.rows.forEach((row, i) => {
       if (row.a <= 0) return;
-      // 줄마다 오른쪽에서 미끄러져 들어오고, 그 밑의 기울어진 띠가 왼쪽부터 그어진다
-      const sweep = 1 - row.dx / 180;
-      g.save(); g.globalAlpha *= row.a; g.translate(row.dx, 0);
+      // 줄마다 살짝 위에서 내려앉고, 그 밑의 기울어진 띠가 함께 그어진다
+      const sweep = 1 + row.dy / DROP;
+      g.save(); g.globalAlpha *= row.a; g.translate(0, row.dy);
       if (i === 1) {
         look.lettering(g, t("RESULT_GRADES"), 64, 782, 28, 592, SKIN.muted, "left", false);
         slantBand(g, 64, 801, 592 * sweep, 4, SKIN.muted);
-        // 이번 판 연쇄 수 · 터뜨린 폭탄 수
-        const names: TextKey[] = ["R_CHAINS", "R_BOMBS"], cols = ["#ffc733", "#ffffff"];
+        // 이번 판 연쇄 수 · 깬 크리스탈 수
+        const names: TextKey[] = ["R_CHAINS", "R_CRYSTALS"], cols = ["#ffc733", "#e8f6ff"];
         for (let k = 0; k < 2; k++) {
           const x = 64 + k * 324, y = 866;
           look.lettering(g, t(names[k]), x, y, 28, 162, cols[k], "left", false);

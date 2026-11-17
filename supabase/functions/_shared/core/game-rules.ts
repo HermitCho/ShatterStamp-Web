@@ -1,21 +1,38 @@
 /**
- * 점수, 연쇄, 피버, 시간 규칙. 화면과 분리되어 있어 게임, 테스트, 서버 검증, 밸런스 시뮬레이션이 같은 코드를 쓴다.
+ * 점수, 연쇄, 시간 규칙. 화면과 분리되어 있어 게임, 테스트, 서버 검증, 밸런스 시뮬레이션이 같은 코드를 쓴다.
  *
- * 핵심: 빨리 누르기보다 "어디를 찍어야 크게 무너지는가"를 읽는 게 이득이어야 한다.
- * - 판정(PERFECT/MISS)은 없다. 어디를 찍든 부순 만큼 점수를 받는다.
- * - 찍은 뒤 블록이 떨어져 같은 색이 이어지면 저절로 터진다(연쇄). 연쇄 단계마다 배율이 ×2, ×3 … 으로 오른다.
- * - 크게 부수면 폭탄이 생기고, 폭탄은 주변 3×3을 함께 터뜨린다(보드 규칙은 board-model.ts).
- * - 연쇄·폭탄이 피버 게이지를 채운다. 가득 차면 몇 초 동안 점수 ×2.
- * - 시간 보너스는 한 번 찍어 얻은 점수가 "목표 점수"를 넘을 때만 주며, 목표 점수는 시간이 지날수록 오른다.
+ * 핵심: 막 찍기보다 「도장 하나로 여러 색 덩어리를 크게」 찍는 게 확실히 이득이어야 한다.
+ * - 도장 단계 점수 = (n² + 10n) × 여러 색 배율(COLOR_MIN칸 이상 부순 색 가짓수 1/2/3/4/5 → ×1/1.5/2.2/3/4).
+ * - 연쇄(떨어져 같은 색이 이어지면 저절로 터짐)는 운이 크므로 보너스로만: 연쇄 단계 점수 ×0.3.
+ * - 시간 보너스: 3색 +0.25초, 4색 이상 +0.5초, 크리스탈 하나 깰 때마다 +0.5초.
+ * - 크리스탈(보드 규칙은 board-model.ts): 크게 부수면 가로줄, 4색 이상이면 십자 크리스탈이 생기고,
+ *   옆에서 터지면 줄을 지운다.
+ * - 피버: 연쇄·크리스탈이 게이지를 채우면 FEVER_TIME초 동안 도장이 3×3(FEVER_SHAPE)이 되고 아무 데나 찍힌다.
+ *   피버 중에는 게이지·시간 보너스가 쌓이지 않고 크리스탈도 생기지 않는다.
  */
-export const GAME_TIME = 60;
-export const MAX_TIME = 99;
+export const GAME_TIME = 100;
+export const MAX_TIME = 180;
 /** 한 번 찍은 뒤 다음 찍기까지 막아 두는 시간(연타 방지). 게임은 연쇄 연출이 끝날 때까지 더 오래 막는다. */
 export const STAMP_COOLDOWN = 0.35;
-/** 피버 게이지: 연쇄 한 단계·폭탄 하나마다 1칸 */
-export const FEVER_NEED = 24;
+/** 홀드는 언제든 바꿀 수 있지만, 바꾼 뒤 이 시간(초)은 다시 못 바꾼다(실수로 연타해도 괜찮게) */
+export const HOLD_COOLDOWN = 0.5;
+/** 여러 색 배율(색 가짓수 → 배율) */
+export const COLOR_MULT = [1, 1, 1.5, 2.2, 3, 4];
+/** 연쇄 단계 점수 배율 */
+export const CHAIN_MULT = 0.3;
+/** 시간 보너스(초): 색 가짓수 → 초, 크리스탈 하나 */
+export const COLOR_TIME = [0, 0, 0, 0.25, 0.5, 0.5];
+export const CRYSTAL_TIME = 0.5;
+/** 한 번 찍을 때 도장 단계에서 이만큼 이상 부서져야 찍힌다(막 누르기 방지). 튜토리얼은 예외. */
+export const MIN_BREAK = 9;
+/** 너무 작아서 안 찍혔을 때 다음 찍기까지 막는 시간(초) */
+export const FAIL_LOCK = 0.4;
+/** 피버 게이지: 연쇄 1번·크리스탈 1개가 1씩 채운다 */
+export const FEVER_NEED = 34;
+/** 피버 길이(게임 시간, 초) */
 export const FEVER_TIME = 6;
-export const FEVER_MULT = 2;
+/** 피버 중 점수 배율 */
+export const FEVER_MULT = 1;
 
 export interface StampResult {
   /** 단계별 점수(0 = 도장, 1.. = 연쇄) */
@@ -23,35 +40,38 @@ export interface StampResult {
   points: number;
   /** 연쇄 횟수(단계 수 - 1) */
   chains: number;
-  bombs: number;
+  /** 여러 색 가짓수와 그 배율 */
+  colors: number;
+  mult: number;
+  crystals: number;
   timeDelta: number;
-  target: number;
-  /** 이번에 피버가 시작됐는지 */
+  /** 이 찍기로 피버가 시작됨 */
   feverStarted: boolean;
+  /** 피버 중에 찍은 것 */
+  fever: boolean;
 }
 
 export function basePoints(n: number): number {
   return n * n + n * 10;
 }
 
-/** 단계 배율: 도장 ×1, 첫 연쇄 ×2, 두 번째 ×3 … */
-export function chainMult(chain: number): number {
-  return 1 + chain;
+export function colorMult(colors: number): number {
+  return COLOR_MULT[Math.min(colors, COLOR_MULT.length - 1)];
+}
+
+/** 단계별 부순 칸 수와 여러 색 가짓수로 단계별 점수를 계산한다. */
+export function stepPoints(counts: number[], colors: number): number[] {
+  return counts.map((n, chain) => Math.trunc(basePoints(n) * (chain === 0 ? colorMult(colors) : CHAIN_MULT)));
 }
 
 export class GameRules {
-  /** 시간 보너스 목표 점수 = targetBase + targetGrowth * 경과 초 */
-  targetBase = 1000;
-  targetGrowth = 90;
-
   score = 0;
   /** 한 번 찍어 낸 가장 긴 연쇄 */
   maxChain = 0;
   chainTotal = 0;
-  bombTotal = 0;
-  feverGauge = 0;
-  /** 남은 피버 시간(0이면 피버 아님) */
-  feverLeft = 0;
+  crystalTotal = 0;
+  /** 한 번에 낸 가장 많은 색 가짓수 */
+  maxColors = 0;
   timeLeft = GAME_TIME;
   elapsed = 0;
   stamps = 0;
@@ -59,14 +79,20 @@ export class GameRules {
   /** 한 번에(한 단계) 가장 많이 부순 칸 수 */
   biggest = 0;
   bonusTimeTotal = 0;
+  feverGauge = 0;
+  /** 피버가 끝나는 게임 시간(elapsed 기준). 이 시각 전까지 피버. */
+  feverUntil = 0;
+  feverCount = 0;
 
   reset(): void {
+    this.feverGauge = 0;
+    this.feverUntil = 0;
+    this.feverCount = 0;
     this.score = 0;
     this.maxChain = 0;
     this.chainTotal = 0;
-    this.bombTotal = 0;
-    this.feverGauge = 0;
-    this.feverLeft = 0;
+    this.crystalTotal = 0;
+    this.maxColors = 0;
     this.timeLeft = GAME_TIME;
     this.elapsed = 0;
     this.stamps = 0;
@@ -75,70 +101,59 @@ export class GameRules {
     this.bonusTimeTotal = 0;
   }
 
-  get inFever(): boolean {
-    return this.feverLeft > 0;
-  }
-
-  /** 시간을 흘린다. 피버가 끝나면 true. */
-  tick(delta: number): boolean {
+  /** 시간을 흘린다. */
+  tick(delta: number): void {
     this.timeLeft -= delta;
     this.elapsed += delta;
-    if (this.feverLeft > 0) {
-      this.feverLeft -= delta;
-      if (this.feverLeft <= 0) {
-        this.feverLeft = 0;
-        return true;
-      }
-    }
-    return false;
+  }
+
+  /** 게임 시간 t(기록에 남는 시각)에 피버 중인가. 게임과 서버가 같은 t로 판정한다. */
+  feverAt(t: number): boolean {
+    return t < this.feverUntil;
+  }
+
+  get inFever(): boolean {
+    return this.feverAt(this.elapsed);
+  }
+
+  /** 남은 피버 시간 */
+  get feverLeft(): number {
+    return Math.max(0, this.feverUntil - this.elapsed);
   }
 
   isOver(): boolean {
     return this.timeLeft <= 0;
   }
 
-  /** 지금 시간 보너스를 받기 위한 1회 획득 점수 기준 */
-  timeTarget(): number {
-    return Math.trunc(this.targetBase + this.targetGrowth * this.elapsed);
-  }
-
-  /** 단계별 부순 칸 수로 점수를 계산한다(보드·점수는 바꾸지 않는다. 미리보기용). */
-  pointsFor(counts: number[]): number[] {
-    const fever = this.inFever ? FEVER_MULT : 1;
-    return counts.map((n, chain) => Math.trunc(basePoints(n) * chainMult(chain) * fever));
-  }
-
-  /** 한 번 찍은 결과를 반영한다. counts: 단계별 부순 칸 수, bombs: 터진 폭탄 수 */
-  registerStamp(counts: number[], bombs: number): StampResult {
-    const stepPoints = this.pointsFor(counts);
-    const points = stepPoints.reduce((a, b) => a + b, 0);
+  /** 한 번 찍은 결과를 반영한다. counts: 단계별 부순 칸 수, colors: 여러 색 가짓수, crystals: 깨진 크리스탈 수 */
+  registerStamp(counts: number[], colors: number, crystals: number, at = this.elapsed): StampResult {
+    const fever = this.feverAt(at);
+    const steps = stepPoints(counts, colors).map((p) => (fever ? Math.trunc(p * FEVER_MULT) : p));
+    const points = steps.reduce((a, b) => a + b, 0);
     const chains = counts.length - 1;
     this.stamps++;
     this.score += points;
     this.maxChain = Math.max(this.maxChain, chains);
     this.chainTotal += chains;
-    this.bombTotal += bombs;
+    this.crystalTotal += crystals;
+    this.maxColors = Math.max(this.maxColors, colors);
     for (const n of counts) {
       this.totalBroken += n;
       this.biggest = Math.max(this.biggest, n);
     }
-
+    const timeDelta = fever ? 0 : COLOR_TIME[Math.min(colors, COLOR_TIME.length - 1)] + crystals * CRYSTAL_TIME;
+    this.bonusTimeTotal += timeDelta;
+    this.timeLeft = Math.min(this.timeLeft + timeDelta, MAX_TIME);
     let feverStarted = false;
-    if (!this.inFever) {
-      this.feverGauge += chains + bombs;
+    if (!fever) {
+      this.feverGauge += chains + crystals;
       if (this.feverGauge >= FEVER_NEED) {
         this.feverGauge = 0;
-        this.feverLeft = FEVER_TIME;
+        this.feverUntil = at + FEVER_TIME;
+        this.feverCount++;
         feverStarted = true;
       }
     }
-
-    const target = this.timeTarget();
-    let timeDelta = 0;
-    if (points >= target * 2) timeDelta = 2;
-    else if (points >= target) timeDelta = 1;
-    this.bonusTimeTotal += timeDelta;
-    this.timeLeft = Math.min(this.timeLeft + timeDelta, MAX_TIME);
-    return { stepPoints, points, chains, bombs, timeDelta, target, feverStarted };
+    return { stepPoints: steps, points, chains, colors, mult: colorMult(colors), crystals, timeDelta, feverStarted, fever };
   }
 }

@@ -2,10 +2,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { planMoves } from "../src/core/bot.ts";
-import { GAME_TIME, GameRules, STAMP_COOLDOWN } from "../src/core/game-rules.ts";
+import { FAIL_LOCK, GAME_TIME, GameRules, HOLD_COOLDOWN, MIN_BREAK, STAMP_COOLDOWN } from "../src/core/game-rules.ts";
 import { newBoard, newQueue, REPLAY_VERSION, simulateRun, type Replay, type ReplayEvent } from "../src/core/replay.ts";
 import { Rng } from "../src/core/rng.ts";
-import type { Shape } from "../src/core/shapes.ts";
+import { FEVER_SHAPE, type Shape } from "../src/core/shapes.ts";
 
 /** game.ts의 흐름(update의 tick → 입력 처리, 쿨다운, 홀드, 튜토리얼)을 그대로 흉내 낸 한 판 */
 function playLikeClient(seed: number, opts: { tutorial?: boolean; botSeed?: number; sloppy?: number } = {}) {
@@ -16,39 +16,44 @@ function playLikeClient(seed: number, opts: { tutorial?: boolean; botSeed?: numb
   rules.timeLeft = GAME_TIME;
   let current: Shape = queue.pop();
   let held: Shape | null = null;
-  let holdUsed = false;
+  let holdLock = 0;
   let stampLock = 0;
   const events: ReplayEvent[] = [];
   let tutorial: ReplayEvent[] | null = null;
 
   const hold = (log: ReplayEvent[], t: number) => {
-    if (holdUsed) return;
+    if (holdLock > 0 || rules.inFever) return;
     if (!held) {
       held = current;
       current = queue.pop();
     } else [held, current] = [current, held];
-    holdUsed = true;
+    holdLock = HOLD_COOLDOWN;
     log.push(["h", t]);
   };
-  const best = () => planMoves(board, current.cells, queue.peek(1)[0].cells)[0];
-  const place = (x: number, y: number) => {
+  const best = () => (rules.inFever ? planMoves(board, FEVER_SHAPE.cells, FEVER_SHAPE.cells) : planMoves(board, current.cells, queue.peek(1)[0].cells))[0];
+  const place = (x: number, y: number, tut = false) => {
+    if (!tut && rules.inFever) {
+      // 피버: 3×3, 어디든, 모양 순서는 그대로
+      const res = board.resolve(x, y, FEVER_SHAPE.cells, FEVER_SHAPE.cells, false)!;
+      return { counts: res.steps.map((s) => s.broken.length), colors: res.colors, crystals: 0 };
+    }
+    if (!tut && board.stampCount(x, y, current.cells) < MIN_BREAK) return "small" as const;
     const res = board.resolve(x, y, current.cells, queue.peek(1)[0].cells);
     if (!res) return null;
     current = queue.pop();
-    holdUsed = false;
-    return { counts: res.steps.map((s) => s.broken.length), bombs: res.steps.reduce((a, s) => a + s.bombs.length, 0) };
+    return { counts: res.steps.map((s) => s.broken.length), colors: res.colors, crystals: res.steps.reduce((a, s) => a + s.crystals.length, 0) };
   };
 
   if (opts.tutorial) {
     tutorial = [];
     for (let i = 0; i < 3; i++) {
       const mv = best();
-      place(mv.x, mv.y);
+      place(mv.x, mv.y, true);
       tutorial.push(["s", 0, mv.x, mv.y]);
     }
     hold(tutorial, 0);
     held = null;
-    holdUsed = false;
+    holdLock = 0;
   }
 
   let think = 0.5;
@@ -58,6 +63,7 @@ function playLikeClient(seed: number, opts: { tutorial?: boolean; botSeed?: numb
     const dt = rnd.next() < 0.08 ? real * 0.05 : real;
     rules.tick(dt);
     if (stampLock > 0) stampLock = Math.max(0, stampLock - dt);
+    if (holdLock > 0) holdLock = Math.max(0, holdLock - dt);
     if (rules.isOver()) break;
     think -= dt;
     if (think > 0) continue;
@@ -71,20 +77,26 @@ function playLikeClient(seed: number, opts: { tutorial?: boolean; botSeed?: numb
       ? { x: rnd.int(0, board.cols - 1), y: rnd.int(0, board.rows - 1) }
       : best();
     const r = place(mv.x, mv.y);
+    if (r === "small") {
+      // 너무 작아 안 찍힘: 기록하지 않고 잠깐 막힌다
+      stampLock = FAIL_LOCK;
+      continue;
+    }
     if (!r) continue;
     events.push(["s", rules.elapsed, mv.x, mv.y]);
-    rules.registerStamp(r.counts, r.bombs);
+    rules.registerStamp(r.counts, r.colors, r.crystals);
     // 게임은 연쇄 연출이 끝날 때까지 더 오래 막는다(서버는 최소 쿨다운만 본다)
     stampLock = STAMP_COOLDOWN + (rnd.next() < 0.5 ? 0 : 0.4 * (r.counts.length - 1));
   }
   const replay: Replay = { v: REPLAY_VERSION, tutorial, events };
-  return { replay, score: rules.score, maxCombo: rules.maxChain, biggest: rules.biggest, elapsed: rules.elapsed };
+  return { replay, score: rules.score, maxCombo: rules.maxChain, biggest: rules.biggest, elapsed: rules.elapsed, fevers: rules.feverCount };
 }
 
 /** JSON으로 보내고 받은 것처럼 만든다 */
 const wire = (r: Replay): Replay => JSON.parse(JSON.stringify(r));
 
 test("server replay reproduces the client's score exactly", () => {
+  let fevers = 0;
   for (let i = 0; i < 40; i++) {
     const seed = 1000 + i * 7919;
     const game = playLikeClient(seed, { tutorial: i % 3 === 0, botSeed: i + 1, sloppy: (i % 5) / 5 });
@@ -95,7 +107,9 @@ test("server replay reproduces the client's score exactly", () => {
     assert.equal(sim.maxCombo, game.maxCombo, `game ${i} combo`);
     assert.equal(sim.biggest, game.biggest, `game ${i} biggest`);
     assert.ok(Math.abs(sim.duration - game.elapsed) < 0.05, `game ${i} duration ${sim.duration} vs ${game.elapsed}`);
+    fevers += game.fevers;
   }
+  assert.ok(fevers > 0, "some games reach fever (3x3 stamps are checked too)");
 });
 
 test("a different seed gives a different result (seed binds the board)", () => {
@@ -141,4 +155,23 @@ test("score comes from the board, not from the client's claim", () => {
   // 같은 기록이면 몇 번을 돌려도 같은 점수이고, 기록 없는 판은 0점이다.
   const empty = simulateRun(5, { v: REPLAY_VERSION, tutorial: null, events: [] });
   assert.deepEqual(empty, { ok: true, score: 0, maxCombo: 0, biggest: 0, duration: GAME_TIME });
+});
+
+test("stamps that break fewer than MIN_BREAK blocks are rejected by the server", () => {
+  const seed = 4242;
+  const board = newBoard(seed);
+  const cells = newQueue(seed).pop().cells;
+  let spot: [number, number] | null = null;
+  for (let y = 0; y < board.rows && !spot; y++)
+    for (let x = 0; x < board.cols && !spot; x++) if (board.stampCount(x, y, cells) < MIN_BREAK) spot = [x, y];
+  assert.ok(spot, "a small spot exists");
+  const res = simulateRun(seed, { v: REPLAY_VERSION, tutorial: null, events: [["s", 1, spot[0], spot[1]]] });
+  assert.equal(res.ok, false);
+});
+
+test("holds can repeat, but only HOLD_COOLDOWN seconds apart", () => {
+  const ok = simulateRun(99, { v: REPLAY_VERSION, tutorial: null, events: [["h", 1], ["h", 1 + HOLD_COOLDOWN], ["h", 1 + 2 * HOLD_COOLDOWN]] });
+  assert.ok(ok.ok, !ok.ok ? ok.reason : "");
+  const fast = simulateRun(99, { v: REPLAY_VERSION, tutorial: null, events: [["h", 1], ["h", 1.3]] });
+  assert.ok(!fast.ok && fast.reason === "hold");
 });

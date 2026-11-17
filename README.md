@@ -1,6 +1,6 @@
 # Shatter Stamp (Web)
 
-60초 연쇄 퍼즐 게임 **Shatter Stamp**의 웹(TypeScript + Canvas 2D) 버전.
+100초 연쇄 퍼즐 게임 **Shatter Stamp**의 웹(TypeScript + Canvas 2D) 버전.
 Godot 버전(`D:\Godot\ShatterStamp`, https://github.com/HermitCho/ShatterStamp)에서 출발했고(지금은 판정 대신 연쇄·폭탄 규칙으로 바뀜),
 엔진 없이 만들어 첫 로딩이 가볍다 (JS 약 26KB gzip + 한글 폰트 서브셋 약 140KB, Godot 웹 빌드는 약 10MB).
 
@@ -25,10 +25,10 @@ npm run sim        # 봇 밸런스 시뮬레이션 (-- --runs=30 --base=1000 --g
 
 ```
 src/core/          화면과 분리된 순수 로직 (테스트·시뮬레이션이 같은 코드를 씀)
-  board-model.ts   보드: 연결 블록 탐색, 낙하, 보충, 보충 조정, 연쇄(낙하 뒤 같은 색 5칸 이상), 폭탄(3×3)
-  game-rules.ts    점수(연쇄 단계마다 ×2, ×3 …), 피버 게이지(×2), 시간 보너스
+  board-model.ts   보드: 연결 블록 탐색, 낙하, 보충, 보충 조정, 연쇄(낙하 뒤 같은 색 6칸 이상), 폭탄(3×3)
+  game-rules.ts    점수, 9칸 제한, 피버 게이지(연쇄·크리스탈 → 6초 동안 3×3 도장), 시간 보너스
   bot.ts           자리마다 연쇄까지 굴려 본 점수 순위(튜토리얼·봇·서버 검증)
-  shapes.ts        모양 16종 (홀수 크기, 정가운데 = 마우스 칸)
+  shapes.ts        모양 14종 (홀수 크기, 정가운데 = 마우스 칸)
   shape-queue.ts   주머니 섞기 방식 모양 큐
   rng.ts           시드 난수
   replay.ts        판 다시 돌리기: 서버 시드로 보드를 만들고, 찍기·홀드 기록으로 점수를 다시 계산(랭킹 검증)
@@ -132,7 +132,7 @@ GitHub 저장소 › Settings › Secrets and variables › Actions › `SUPABAS
      튜토리얼 악용·잘못된 값이 있으면 거절한다.
   4. 계산한 점수는 `record_run`(서버 함수 전용, 로그인 사용자도 못 부름)이 넣는다. 표는 한 번만 쓰이고,
      표를 받은 뒤 실제로 흐른 시간이 판의 게임 시간보다 짧으면(미리 계산해 바로 보내기) 거절한다.
-  - 남는 한계: 실제로 60초 동안 판을 두는 프로그램(봇)은 막지 못한다. 점수가 사람 기록보다 지나치게 높으면 확인이 필요하다.
+  - 남는 한계: 실제로 100초 동안 판을 두는 프로그램(봇)은 막지 못한다. 점수가 사람 기록보다 지나치게 높으면 확인이 필요하다.
   - 자동 플레이·`?time=`·`?debug=1` 판은 처음부터 등록하지 않는다.
 - **키:** 게임에는 공개용 publishable 키만 넣는다. Secret / service_role 키는 저장소·채팅 어디에도 두지 않는다.
 - **대시보드:** Email 로그인 끄기(Google만 사용), Google OAuth 앱 게시, Supabase·Google·GitHub 계정 2단계 인증,

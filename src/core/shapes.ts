@@ -18,8 +18,6 @@ const c = (x: number, y: number): Cell => ({ x, y });
 export const SHAPES: Shape[] = [
   { id: "I3H", cells: [c(-1, 0), c(0, 0), c(1, 0)] },
   { id: "I3V", cells: [c(0, -1), c(0, 0), c(0, 1)] },
-  { id: "I5H", cells: [c(-2, 0), c(-1, 0), c(0, 0), c(1, 0), c(2, 0)] },
-  { id: "I5V", cells: [c(0, -2), c(0, -1), c(0, 0), c(0, 1), c(0, 2)] },
   { id: "DIAG_A", cells: [c(-1, -1), c(0, 0), c(1, 1)] },
   { id: "DIAG_B", cells: [c(1, -1), c(0, 0), c(-1, 1)] },
   { id: "PLUS", cells: [c(0, -1), c(-1, 0), c(0, 0), c(1, 0), c(0, 1)] },
@@ -35,6 +33,12 @@ export const SHAPES: Shape[] = [
   { id: "S_H", cells: [c(-1, -1), c(-1, 0), c(0, 0), c(1, 0), c(1, 1)] },
   { id: "Z_H", cells: [c(-1, 1), c(-1, 0), c(0, 0), c(1, 0), c(1, -1)] },
 ];
+
+/** 피버 때 도장: 3×3 꽉 찬 네모(어디를 찍어도 MIN_BREAK 이상이 부서진다) */
+export const FEVER_SHAPE: Shape = {
+  id: "FEVER",
+  cells: [-1, 0, 1].flatMap((y) => [-1, 0, 1].map((x) => c(x, y))),
+};
 
 /** idx번 모양. 셀 좌표는 모양을 감싸는 상자의 정가운데가 (0,0)이 되도록 맞춘다. */
 export function getShape(idx: number): Shape {

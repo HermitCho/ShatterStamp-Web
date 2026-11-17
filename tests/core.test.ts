@@ -1,9 +1,9 @@
 // 핵심 로직 테스트. 실행: npm test  (node --test tests/)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BOMB_MIN, BoardModel, CHAIN_MIN, EMPTY } from "../src/core/board-model.ts";
+import { BoardModel, CHAIN_MIN, CRYSTAL, CRYSTAL_COL, CRYSTAL_CROSS, CRYSTAL_MIN, CRYSTAL_ROW, CROSS_MIN, EMPTY } from "../src/core/board-model.ts";
 import { allMoves, bestMove, planMoves } from "../src/core/bot.ts";
-import { FEVER_MULT, FEVER_NEED, FEVER_TIME, GameRules, basePoints } from "../src/core/game-rules.ts";
+import { CHAIN_MULT, COLOR_MULT, CRYSTAL_TIME, GameRules, basePoints } from "../src/core/game-rules.ts";
 import { ShapeQueue } from "../src/core/shape-queue.ts";
 import { getShape, SHAPES } from "../src/core/shapes.ts";
 
@@ -83,32 +83,28 @@ test("fast best move matches brute-force BFS", () => {
   }
 });
 
-test("chain multiplier, fever gauge, time target", () => {
+test("color multiplier on the stamp step, small chain bonus, time from colors and crystals", () => {
   const r = new GameRules();
-  const res = r.registerStamp([10, 6, 5], 0);
-  assert.deepEqual(res.stepPoints, [basePoints(10), basePoints(6) * 2, basePoints(5) * 3]);
+  const res = r.registerStamp([10, 6, 5], 3, 0);
+  assert.deepEqual(res.stepPoints, [
+    Math.trunc(basePoints(10) * COLOR_MULT[3]), Math.trunc(basePoints(6) * CHAIN_MULT), Math.trunc(basePoints(5) * CHAIN_MULT),
+  ]);
   assert.equal(res.chains, 2);
+  assert.equal(res.mult, COLOR_MULT[3]);
   assert.equal(r.maxChain, 2);
   assert.equal(r.biggest, 10);
-  assert.equal(r.feverGauge, 2);
-  // 게이지가 차면 피버: 점수 ×2, FEVER_TIME 뒤 끝난다
-  const f = r.registerStamp(Array(FEVER_NEED).fill(5), 0);
-  assert.ok(f.feverStarted && r.inFever);
-  assert.equal(r.registerStamp([10], 0).points, basePoints(10) * FEVER_MULT);
-  assert.ok(r.tick(FEVER_TIME + 0.01), "fever times out");
-  assert.ok(!r.inFever);
-  const t0 = r.timeTarget();
-  r.tick(10);
-  assert.ok(r.timeTarget() > t0, "time target rises");
-  r.reset();
-  assert.equal(r.registerStamp([3], 0).timeDelta, 0, "small stamp gives no time");
-  assert.ok(r.registerStamp([30], 0).timeDelta >= 1, "big stamp over target gives time");
+  assert.equal(res.timeDelta, 0.25, "3 colors: +0.25s");
+  assert.equal(r.registerStamp([10], 1, 0).timeDelta, 0, "one color: no time");
+  assert.equal(r.registerStamp([10], 5, 2).timeDelta, 0.5 + 2 * CRYSTAL_TIME, "4+ colors and crystals");
+  assert.equal(r.crystalTotal, 2);
+  // 1색과 2색: 같은 칸 수라도 여러 색이 더 높다
+  assert.ok(r.registerStamp([12], 2, 0).points > r.registerStamp([12], 1, 0).points);
 });
 
 test("falling blocks that link up chain-break; fresh blocks do not start chains", () => {
-  // 0열: 1이 네 칸(1~4행), 맨 아래는 0. 0을 찍으면 1 네 칸이 한 칸 내려와 (1,5)의 1과 이어진다(5칸 → 연쇄).
+  // 0열: 1이 다섯 칸(0~4행), 맨 아래는 0. 0을 찍으면 1 다섯 칸이 한 칸 내려와 (1,5)의 1과 이어진다(6칸 → 연쇄).
   const m = modelFrom([
-    "2342",
+    "1342",
     "1234",
     "1342",
     "1423",
@@ -152,23 +148,75 @@ test("fresh blocks never start a chain on their own", () => {
   }
 });
 
-test("bombs blast 3x3 and are made by big stamps", () => {
+test("column crystals clear their column only", () => {
   const m = modelFrom(["0123", "1230", "2301", "3012"]);
-  m.bombs[1 * 4 + 1] = 1; // (1,1)
-  const info = m.expandBombs([{ x: 1, y: 1 }]);
-  assert.equal(info.cells.length, 9);
-  assert.deepEqual(info.bombs, [{ x: 1, y: 1 }]);
-  // 이웃 폭탄도 이어서 터진다
-  m.bombs[2 * 4 + 2] = 1;
-  assert.equal(m.expandBombs([{ x: 1, y: 1 }]).cells.length, 14);
-  // 한 번에 BOMB_MIN칸 이상 → 찍은 자리에 폭탄
+  m.set(1, 1, CRYSTAL);
+  m.crystals[1 * 4 + 1] = CRYSTAL_COL;
+  const info = m.expandCrystals([{ x: 0, y: 1 }]);
+  assert.deepEqual(info.crystals, [{ x: 1, y: 1, kind: CRYSTAL_COL }]);
+  assert.deepEqual(new Set(info.cells.map((p) => `${p.x},${p.y}`)), new Set(["0,1", "1,0", "1,1", "1,2", "1,3"]));
+});
+
+test("crystals: break when a neighbor breaks, clear their row (cross: row and column), never link colors", () => {
+  const m = modelFrom(["0123", "1230", "2301", "3012"]);
+  const put = (x: number, y: number, kind: number) => {
+    m.set(x, y, CRYSTAL);
+    m.crystals[y * 4 + x] = kind;
+  };
+  put(1, 1, CRYSTAL_ROW);
+  // (0,1) 옆이 부서지면 (1,1) 크리스탈이 깨지며 1행 전체
+  let info = m.expandCrystals([{ x: 0, y: 1 }]);
+  assert.deepEqual(info.crystals, [{ x: 1, y: 1, kind: CRYSTAL_ROW }]);
+  assert.deepEqual(new Set(info.cells.map((p) => `${p.x},${p.y}`)), new Set(["0,1", "1,1", "2,1", "3,1"]));
+  // 십자는 세로 줄도, 줄에 걸린 크리스탈은 이어서 깨진다
+  put(1, 1, CRYSTAL_CROSS);
+  put(3, 2, CRYSTAL_ROW); // 1행이 지워지며 (3,1) 옆이라 이어서 깨지고 2행도
+  info = m.expandCrystals([{ x: 0, y: 1 }]);
+  assert.equal(info.crystals.length, 2);
+  assert.equal(info.cells.length, 4 + 3 + 3, "row 1 + column 1 + rest of row 2");
+  // 크리스탈은 색 덩어리로 번지지 않는다: 크리스탈을 직접 찍어도 그 칸만
+  const m2 = modelFrom(["00", "00"]);
+  m2.set(0, 0, CRYSTAL);
+  m2.set(1, 0, CRYSTAL);
+  assert.equal(m2.computeBreak(0, 0, [{ x: 0, y: 0 }]).all.length, 1);
+});
+
+test("crystals are made by big or many-color stamps, not by cells a crystal cleared", () => {
+  // 한 색으로 CROSS_MIN칸 이상 → 십자
   const big = new BoardModel(8, 9, 5, 1);
   big.cells.fill(2);
   const res = big.resolve(3, 3, [{ x: 0, y: 0 }])!;
-  assert.ok(res.steps[0].broken.length >= BOMB_MIN);
-  assert.deepEqual(res.bomb, { x: 3, y: 3 });
-  assert.ok(big.isBomb(3, 3));
+  assert.ok(res.steps[0].broken.length >= CROSS_MIN);
+  assert.equal(res.colors, 1);
+  assert.deepEqual(res.crystal, { x: 3, y: 3, kind: CRYSTAL_CROSS });
+  assert.equal(big.get(3, 3), CRYSTAL);
   assert.ok([...big.cells].every((c) => c !== EMPTY));
+  // CRYSTAL_MIN칸 이상: 옆으로 길게 부수면 가로줄, 위아래로 길게 부수면 세로줄
+  const wide = modelFrom(["00000001", "00000012", "12341234", "34123412"]);
+  wide.steerTrials = 1;
+  const rw = wide.resolve(0, 0, [{ x: 0, y: 0 }])!;
+  assert.equal(rw.steps[0].broken.length, CRYSTAL_MIN);
+  assert.equal(rw.crystal?.kind, CRYSTAL_ROW);
+  const tall = modelFrom(["0012", "0023", "0034", "0041", "0012", "0023", "0013", "1234"]);
+  tall.steerTrials = 1;
+  const rt = tall.resolve(0, 0, [{ x: 0, y: 0 }])!;
+  assert.equal(rt.steps[0].broken.length, 14);
+  assert.equal(rt.crystal?.kind, CRYSTAL_COL);
+  // 네 가지 색을 3칸씩 → 십자
+  const four = modelFrom(["0000", "1112", "3332", "4442"]);
+  four.steerTrials = 1;
+  const r4 = four.resolve(0, 1, [{ x: 0, y: -1 }, { x: 0, y: 0 }, { x: 0, y: 1 }, { x: 0, y: 2 }])!;
+  assert.equal(r4.colors, 4);
+  assert.deepEqual(r4.colorSet, [0, 1, 3, 4]);
+  assert.equal(r4.crystal?.kind, CRYSTAL_CROSS);
+  // 작은 도장이 크리스탈 줄을 터뜨려도(줄 칸은 세지 않음) 새 크리스탈은 안 생긴다
+  const m = modelFrom(["01234012", "12340123"]);
+  m.set(1, 0, CRYSTAL);
+  m.crystals[1] = CRYSTAL_ROW;
+  m.steerTrials = 1;
+  const r = m.resolve(0, 0, [{ x: 0, y: 0 }])!;
+  assert.equal(r.steps[0].broken.length, 8);
+  assert.equal(r.crystal, null);
 });
 
 function bestSpread(steer: boolean): number {
@@ -191,4 +239,10 @@ function bestSpread(steer: boolean): number {
 test("refill steering narrows the best-break spread", () => {
   const off = bestSpread(false), on = bestSpread(true);
   assert.ok(on < off * 0.6, `spread ${off.toFixed(2)} -> ${on.toFixed(2)}`);
+});
+
+test("the fever song is exactly as long as fever", async () => {
+  const { FEVER_SONG } = await import("../src/game/music.ts");
+  const { FEVER_TIME } = await import("../src/core/game-rules.ts");
+  assert.equal(FEVER_SONG, FEVER_TIME);
 });

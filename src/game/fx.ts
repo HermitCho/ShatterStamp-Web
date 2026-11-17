@@ -4,6 +4,8 @@ const GRAVITY = 1800;
 interface Part { x: number; y: number; vx: number; vy: number; t: number; max: number; s: number; c: string; r: number; rv: number }
 interface Flash { x: number; y: number; s: number; c: string; t: number; max: number }
 interface Ring { x: number; y: number; r: number; c: string; t: number; max: number }
+/** 줄 지우기 빛줄기: (x, y)에서 가로(또는 세로)로 len만큼 뻗었다가 가늘어지며 사라진다. */
+interface Beam { x: number; y: number; len: number; w: number; vertical: boolean; c: string; t: number; max: number }
 interface Star { x: number; y: number; vx: number; vy: number; t: number; max: number; s: number; c: string; ember?: boolean }
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -13,6 +15,11 @@ export class Fx {
   private flashes: Flash[] = [];
   private rings: Ring[] = [];
   private stars: Star[] = [];
+  private beams: Beam[] = [];
+
+  beam(x: number, y: number, len: number, w: number, vertical: boolean, c: string): void {
+    this.beams.push({ x, y, len, w, vertical, c, t: 0, max: 0.42 });
+  }
 
   burst(x: number, y: number, c: string, amount: number, power: number): void {
     for (let i = 0; i < amount; i++) {
@@ -70,6 +77,8 @@ export class Fx {
     }
     for (const f of this.flashes) f.t += dt;
     for (const r of this.rings) r.t += dt;
+    for (const b of this.beams) b.t += dt;
+    this.beams = this.beams.filter((b) => b.t < b.max);
     this.parts = this.parts.filter((p) => p.t < p.max);
     this.stars = this.stars.filter((s) => s.t < s.max);
     this.flashes = this.flashes.filter((f) => f.t < f.max);
@@ -86,6 +95,17 @@ export class Fx {
       g.fillRect(f.x - s / 2, f.y - s / 2, s, s);
     }
     g.globalCompositeOperation = "lighter";
+    for (const b of this.beams) {
+      // 처음 0.1초에 끝까지 뻗고, 그 뒤 가늘어지며 사라진다
+      const k = b.t / b.max, grow = Math.min(1, b.t / 0.1), half = (b.len / 2) * grow;
+      const w = b.w * (1 - k) + 2;
+      g.globalAlpha = 1 - k * k;
+      for (const [ww, c] of [[w * 2.4, b.c], [w, "#ffffff"]] as const) {
+        g.fillStyle = c;
+        if (b.vertical) g.fillRect(b.x - ww / 2, b.y - half, ww, half * 2);
+        else g.fillRect(b.x - half, b.y - ww / 2, half * 2, ww);
+      }
+    }
     for (const r of this.rings) {
       const k = r.t / r.max;
       g.globalAlpha = (1 - k) * 0.45;
