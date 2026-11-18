@@ -173,9 +173,10 @@ const TEXT = {
 export type TextKey = keyof typeof TEXT;
 
 
-let lang = 0;
+// 기본은 영어. 설정에서 한국어를 고른 적이 있으면 한국어로 연다.
+let lang = 1;
 try {
-  lang = localStorage.getItem("ss.lang") === "en" ? 1 : 0;
+  lang = localStorage.getItem("ss.lang") === "ko" ? 0 : 1;
 } catch {
   /* 저장소를 못 쓰는 환경에서도 기본값으로 동작 */
 }

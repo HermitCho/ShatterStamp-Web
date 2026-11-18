@@ -11,9 +11,11 @@ import { SUPABASE_URL, TURNSTILE_SITE_KEY } from "./src/game/online-config.ts";
 function contentSecurityPolicy(): Plugin {
   const supabase = SUPABASE_URL ? ` ${SUPABASE_URL}` : "";
   const turnstile = TURNSTILE_SITE_KEY ? " https://challenges.cloudflare.com" : "";
+  // itch.io 업로드용(npm run pack:itch)은 itch가 페이지에 넣는 도우미 스크립트도 허용한다
+  const itch = process.env.ITCH ? " https://static.itch.io" : "";
   const policy = [
     "default-src 'self'",
-    `script-src 'self'${turnstile}`,
+    `script-src 'self'${turnstile}${itch}`,
     `frame-src${turnstile || " 'none'"}`,
     "style-src 'self' 'unsafe-inline'", // 첫 화면 글꼴·닉네임 입력 창의 <style>
     "img-src 'self' data: blob:",
