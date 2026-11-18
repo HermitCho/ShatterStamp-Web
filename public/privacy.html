@@ -1,11 +1,25 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="referrer" content="strict-origin-when-cross-origin" />
-<title>개인정보처리방침 · Shatter Stamp</title>
+<title>Privacy Policy · Shatter Stamp</title>
 <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+<script>
+  // 게임에서 고른 언어(ss.lang)를 따른다. 기본은 영어.
+  (function () {
+    var l = "en";
+    try { if (localStorage.getItem("ss.lang") === "ko") l = "ko"; } catch (e) {}
+    document.documentElement.lang = l;
+    if (l === "ko") document.title = "개인정보처리방침 · Shatter Stamp";
+  })();
+  function setLang(l) {
+    try { localStorage.setItem("ss.lang", l); } catch (e) {}
+    document.documentElement.lang = l;
+    document.title = l === "ko" ? "개인정보처리방침 · Shatter Stamp" : "Privacy Policy · Shatter Stamp";
+  }
+</script>
 <style>
   body { margin: 0; background: #090715; color: #e6e8f5; font: 16px/1.75 system-ui, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
   main { max-width: 760px; margin: 0 auto; padding: 40px 22px 80px; }
@@ -18,17 +32,75 @@
   th, td { border-bottom: 1px solid #2c2843; padding: 8px 6px; text-align: left; vertical-align: top; }
   th { color: #a5a4be; font-weight: 600; }
   .muted { color: #a5a4be; font-size: 14px; }
-  hr { border: 0; border-top: 1px solid #2c2843; margin: 48px 0 8px; }
-  .back { display: inline-block; margin-bottom: 24px; padding: 10px 20px; border: 1px solid #40f2ff88; border-radius: 999px; color: #40f2ff; text-decoration: none; font-weight: 600; box-shadow: 0 0 12px #40f2ff33; }
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .back { display: inline-block; padding: 10px 20px; border: 1px solid #40f2ff88; border-radius: 999px; color: #40f2ff; text-decoration: none; font-weight: 600; box-shadow: 0 0 12px #40f2ff33; }
   .back:hover, .back:focus-visible { background: #40f2ff1a; box-shadow: 0 0 18px #40f2ff66; }
-  .back.bottom { margin: 32px 0 0; }
+  .back.bottom { margin-top: 32px; }
+  .langs button { background: none; border: 0; padding: 4px 6px; color: #a5a4be; font: inherit; font-size: 14px; cursor: pointer; }
+  html[lang="en"] .langs .en, html[lang="ko"] .langs .ko { color: #40f2ff; font-weight: 700; }
+  html[lang="en"] .ko, html[lang="ko"] .en { display: none; }
+  html[lang="en"] .langs .ko, html[lang="ko"] .langs .en { display: inline; }
 </style>
 </head>
 <body>
 <main>
-<a class="back" href="./index.html">← 게임으로 돌아가기 · Back to game</a>
+<div class="top">
+  <a class="back" href="./index.html"><span class="en">← Back to game</span><span class="ko">← 게임으로 돌아가기</span></a>
+  <span class="langs"><button class="en" onclick="setLang('en')">English</button>·<button class="ko" onclick="setLang('ko')">한국어</button></span>
+</div>
+
+<div class="en">
+<header><img src="./brand/logo-120.png" alt="Shatter Stamp" /><h1>Privacy Policy</h1></header>
+<p class="muted">Shatter Stamp · Effective November 18, 2026</p>
+
+<p>Shatter Stamp (the "Game") collects only what the online ranking needs. You can play everything without signing in to Google. In that case a guest account, with no email or name, is created automatically so your runs can be recorded.</p>
+
+<h2>1. What we collect and why</h2>
+<table>
+  <tr><th>Data</th><th>When</th><th>Used for</th></tr>
+  <tr><td>Google account ID, email address, name, profile picture URL</td><td>When you sign in with Google (sent by Google)</td><td>Only to confirm sign-in and tell accounts apart. Never shown to other people.</td></tr>
+  <tr><td>Guest account ID</td><td>Automatically, when you first play</td><td>Only to tell apart records made before Google sign-in. No email or name is collected.</td></tr>
+  <tr><td>Human-check signals (browser and device information, etc.)</td><td>When a guest account is created</td><td>Only to stop bots from creating accounts in bulk. Cloudflare runs the check; our server receives only the result (pass or fail).</td></tr>
+  <tr><td>Nickname</td><td>When you set one</td><td>Shown on the leaderboard.</td></tr>
+  <tr><td>Score, max combo, biggest break, time of the record</td><td>When you finish a round (guests included)</td><td>Shown on the leaderboard and in "My records". Not shown on the leaderboard until you set a nickname.</td></tr>
+  <tr><td>Round log (where and when you stamped) and round ID</td><td>When you finish a round (guests included)</td><td>Only for the server to re-compute and verify the score. The round log itself is not stored.</td></tr>
+</table>
+<p>We do not use your data for advertising, sell it, or combine it with other services.</p>
+
+<h2>2. What is stored on your device</h2>
+<p>Your browser's storage (localStorage) keeps your best score, settings (sound, shake, language), whether you finished the tutorial, your sign-in session (guest included), and a round that could not be sent yet (up to 6 hours, deleted as soon as it is sent). While you go to Google sign-in, the guest session is kept briefly in that tab (sessionStorage) so your guest records can be moved, and it is deleted as soon as you return. This data stays on your device and can be removed by clearing the site's data in your browser. We use no cookies and no advertising or analytics trackers.</p>
+
+<h2>3. Service providers (processors)</h2>
+<table>
+  <tr><th>Company</th><th>Role</th></tr>
+  <tr><td>Supabase Inc.</td><td>Sign-in and leaderboard data storage (server region: Seoul, South Korea)</td></tr>
+  <tr><td>Google LLC</td><td>Google account sign-in</td></tr>
+  <tr><td>Cloudflare, Inc. (Turnstile)</td><td>Human check when a guest account is created</td></tr>
+  <tr><td>GitHub Inc. (GitHub Pages)</td><td>Serves the game files. Basic access logs such as IP addresses may be kept by GitHub.</td></tr>
+  <tr><td>itch.io (Itch Corp)</td><td>Serves the game files when you play on itch.io. Basic access logs may be kept by itch.io under its own policy.</td></tr>
+</table>
+
+<h2>4. Retention and deletion</h2>
+<p>Guest accounts with no records are deleted automatically after 30 days without a visit. When a guest signs in with Google, the guest records move to that Google account (the higher best stays) and the guest account is deleted. Other account data and records are kept until you ask us to delete them. When you ask, we delete your account, nickname, and all scores without delay. Round IDs used for score checks are cleaned up once they are two days old, the next time you sign in and play.</p>
+<p>You can disconnect the Game at any time in your Google account's <a href="https://myaccount.google.com/connections" rel="noopener">third-party apps and services</a>.</p>
+
+<h2>5. How we protect it</h2>
+<p>Database permissions prevent anyone from directly reading or changing other people's account data and records, and the leaderboard shows only nicknames and scores. All communication is encrypted (HTTPS).</p>
+
+<h2>6. Children</h2>
+<p>If you are under 14, please do not sign in with Google without a parent's or guardian's consent. You can play without Google sign-in.</p>
+
+<h2>7. Contact and deletion requests</h2>
+<p>Please post on the <a href="https://github.com/HermitCho/ShatterStamp-Web/issues" rel="noopener">GitHub issue board</a>. For deletion, just tell us your in-game nickname (do not write your email or other personal information on the public board).</p>
+
+<h2>8. Changes</h2>
+<p>If this policy changes, we will post it on this page with the effective date.</p>
+<p><a href="./terms.html">Terms of Service</a></p>
+</div>
+
+<div class="ko">
 <header><img src="./brand/logo-120.png" alt="Shatter Stamp" /><h1>개인정보처리방침</h1></header>
-<p class="muted">Shatter Stamp · 시행일 2026년 11월 16일</p>
+<p class="muted">Shatter Stamp · 시행일 2026년 11월 18일</p>
 
 <p>Shatter Stamp(이하 "게임")는 온라인 랭킹을 위해 꼭 필요한 정보만 받습니다. Google 로그인 없이도 게임은 모두 할 수 있습니다. 이때는 기록을 남기기 위해 이메일·이름 없이 손님 계정이 자동으로 만들어집니다.</p>
 
@@ -54,6 +126,7 @@
   <tr><td>Google LLC</td><td>Google 계정 로그인</td></tr>
   <tr><td>Cloudflare, Inc. (Turnstile)</td><td>손님 계정을 만들 때 사람인지 확인</td></tr>
   <tr><td>GitHub Inc. (GitHub Pages)</td><td>게임 파일 제공. 접속 시 IP 주소 등 기본 접속 기록이 GitHub에 남을 수 있습니다.</td></tr>
+  <tr><td>itch.io (Itch Corp)</td><td>itch.io에서 플레이할 때 게임 파일 제공. 기본 접속 기록이 itch.io의 정책에 따라 남을 수 있습니다.</td></tr>
 </table>
 
 <h2>4. 보관 기간과 삭제</h2>
@@ -71,23 +144,10 @@
 
 <h2>8. 바뀔 때</h2>
 <p>이 방침이 바뀌면 이 페이지에 시행일과 함께 알립니다.</p>
+<p><a href="./terms.html">이용약관</a></p>
+</div>
 
-<hr />
-<h1 style="font-size:22px">Privacy Policy (English)</h1>
-<p class="muted">Effective November 12, 2026</p>
-<p>Shatter Stamp collects only what the online ranking needs. You can play everything without signing in to Google; in that case a guest account (no email or name) is created automatically so your runs can be recorded.</p>
-<ul>
-  <li><b>Guest account:</b> a random account ID, created when you first play. A bot check by Cloudflare Turnstile runs when it is created; only the pass/fail result reaches our server.</li>
-  <li><b>From Google sign-in:</b> account ID, email, name, and profile picture URL, used only to identify your account. Never shown to others.</li>
-  <li><b>You provide:</b> a nickname, shown on the leaderboard.</li>
-  <li><b>When you finish a round (guests included):</b> score, max combo, biggest break, and time (shown on the leaderboard), plus the round's move log, which is used only to re-compute and verify the score and is not stored.</li>
-  <li><b>On your device:</b> best score, settings, tutorial flag, sign-in session (guest included), and a round that could not be sent yet (up to 6 hours) in localStorage. No cookies, ads, or analytics.</li>
-  <li><b>Processors:</b> Supabase (auth and database, Seoul region), Google (sign-in), Cloudflare (bot check), GitHub Pages (hosting).</li>
-  <li><b>Retention and deletion:</b> guest accounts with no records are deleted after 30 days without a visit. When a guest signs in with Google, the guest records move to that account (the higher best stays) and the guest account is deleted. Everything else is kept until you ask us to delete it. Request deletion via <a href="https://github.com/HermitCho/ShatterStamp-Web/issues" rel="noopener">GitHub Issues</a> (mention your nickname only). You can also remove access in your <a href="https://myaccount.google.com/connections" rel="noopener">Google account connections</a>.</li>
-  <li>We do not sell or share data for advertising.</li>
-</ul>
-<p><a href="./">← Shatter Stamp</a> · <a href="./terms.html">이용약관 / Terms</a></p>
-<a class="back bottom" href="./index.html">← 게임으로 돌아가기 · Back to game</a>
+<a class="back bottom" href="./index.html"><span class="en">← Back to game</span><span class="ko">← 게임으로 돌아가기</span></a>
 </main>
 </body>
 </html>

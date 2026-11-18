@@ -1,11 +1,25 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="referrer" content="strict-origin-when-cross-origin" />
-<title>이용약관 · Shatter Stamp</title>
+<title>Terms of Service · Shatter Stamp</title>
 <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+<script>
+  // 게임에서 고른 언어(ss.lang)를 따른다. 기본은 영어.
+  (function () {
+    var l = "en";
+    try { if (localStorage.getItem("ss.lang") === "ko") l = "ko"; } catch (e) {}
+    document.documentElement.lang = l;
+    if (l === "ko") document.title = "이용약관 · Shatter Stamp";
+  })();
+  function setLang(l) {
+    try { localStorage.setItem("ss.lang", l); } catch (e) {}
+    document.documentElement.lang = l;
+    document.title = l === "ko" ? "이용약관 · Shatter Stamp" : "Terms of Service · Shatter Stamp";
+  }
+</script>
 <style>
   body { margin: 0; background: #090715; color: #e6e8f5; font: 16px/1.75 system-ui, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
   main { max-width: 760px; margin: 0 auto; padding: 40px 22px 80px; }
@@ -15,15 +29,47 @@
   h2 { margin-top: 32px; font-size: 19px; color: #40f2ff; }
   a { color: #ff8ae6; }
   .muted { color: #a5a4be; font-size: 14px; }
-  hr { border: 0; border-top: 1px solid #2c2843; margin: 48px 0 8px; }
-  .back { display: inline-block; margin-bottom: 24px; padding: 10px 20px; border: 1px solid #40f2ff88; border-radius: 999px; color: #40f2ff; text-decoration: none; font-weight: 600; box-shadow: 0 0 12px #40f2ff33; }
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .back { display: inline-block; padding: 10px 20px; border: 1px solid #40f2ff88; border-radius: 999px; color: #40f2ff; text-decoration: none; font-weight: 600; box-shadow: 0 0 12px #40f2ff33; }
   .back:hover, .back:focus-visible { background: #40f2ff1a; box-shadow: 0 0 18px #40f2ff66; }
-  .back.bottom { margin: 32px 0 0; }
+  .back.bottom { margin-top: 32px; }
+  .langs button { background: none; border: 0; padding: 4px 6px; color: #a5a4be; font: inherit; font-size: 14px; cursor: pointer; }
+  html[lang="en"] .langs .en, html[lang="ko"] .langs .ko { color: #40f2ff; font-weight: 700; }
+  html[lang="en"] .ko, html[lang="ko"] .en { display: none; }
+  html[lang="en"] .langs .ko, html[lang="ko"] .langs .en { display: inline; }
 </style>
 </head>
 <body>
 <main>
-<a class="back" href="./index.html">← 게임으로 돌아가기 · Back to game</a>
+<div class="top">
+  <a class="back" href="./index.html"><span class="en">← Back to game</span><span class="ko">← 게임으로 돌아가기</span></a>
+  <span class="langs"><button class="en" onclick="setLang('en')">English</button>·<button class="ko" onclick="setLang('ko')">한국어</button></span>
+</div>
+
+<div class="en">
+<header><img src="./brand/logo-120.png" alt="Shatter Stamp" /><h1>Terms of Service</h1></header>
+<p class="muted">Shatter Stamp · Effective November 16, 2026</p>
+
+<h2>1. The service</h2>
+<p>Shatter Stamp is a free web puzzle game. When you first play, a guest account is created automatically so your records are kept, and once you set a nickname you appear on the online leaderboard. A guest account is tied to this device and browser only, so it cannot be recovered if you clear the site's data. Signing in with Google keeps your records on your account, and the higher of your guest records moves over to the Google account.</p>
+
+<h2>2. Nicknames</h2>
+<p>You may not use a nickname that impersonates another person or the operator, or that contains profanity, sexual content, hate or discrimination, drugs, crime, self-harm, or other inappropriate or illegal content. Such nicknames may be changed or removed without notice.</p>
+
+<h2>3. Fair records</h2>
+<p>Records obtained by anything other than normal play, such as modifying the program, automated input (bots), or attacking the server, will be removed, and the account may be blocked from the leaderboard.</p>
+
+<h2>4. Changes and interruptions</h2>
+<p>The game and leaderboard are a free service run by an individual. They may change or stop without notice, and leaderboard records may be reset. To the extent permitted by law, we accept no liability related to use of the service.</p>
+
+<h2>5. Personal data</h2>
+<p>Personal data is handled under the <a href="./privacy.html">Privacy Policy</a>.</p>
+
+<h2>6. Contact</h2>
+<p><a href="https://github.com/HermitCho/ShatterStamp-Web/issues" rel="noopener">GitHub issue board</a></p>
+</div>
+
+<div class="ko">
 <header><img src="./brand/logo-120.png" alt="Shatter Stamp" /><h1>이용약관</h1></header>
 <p class="muted">Shatter Stamp · 시행일 2026년 11월 16일</p>
 
@@ -44,12 +90,9 @@
 
 <h2>6. 문의</h2>
 <p><a href="https://github.com/HermitCho/ShatterStamp-Web/issues" rel="noopener">GitHub 문의 게시판</a></p>
+</div>
 
-<hr />
-<h1 style="font-size:22px">Terms of Service (English)</h1>
-<p>Shatter Stamp is a free web puzzle game. A guest account is created automatically when you first play, so your runs are recorded; set a nickname to appear on the leaderboard. A guest account lives only in this browser and cannot be recovered if site data is cleared. Signing in with Google keeps your records on your account, and your guest best moves over if it is higher. Nicknames that impersonate others or contain abusive, sexual, hateful, drug-related, or illegal content may be changed or removed. Scores obtained by cheating, bots, or attacks on the service will be removed, and ranking access may be blocked. The service is provided as is, may change or stop without notice, and leaderboards may be reset. Personal data is handled under the <a href="./privacy.html">Privacy Policy</a>.</p>
-<p><a href="./">← Shatter Stamp</a></p>
-<a class="back bottom" href="./index.html">← 게임으로 돌아가기 · Back to game</a>
+<a class="back bottom" href="./index.html"><span class="en">← Back to game</span><span class="ko">← 게임으로 돌아가기</span></a>
 </main>
 </body>
 </html>
