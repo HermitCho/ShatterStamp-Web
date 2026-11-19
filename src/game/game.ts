@@ -71,6 +71,8 @@ const Pop = { BIG: 0, BOUNCE: 1, PLAIN: 2, DROP: 3 } as const;
 const FLOOR_Y = 1078;
 /** 이어하기 뒤 다시 멈출 수 있기까지의 시간(초). 멈춤·이어하기를 반복해 생각할 시간을 버는 꼼수를 줄인다. */
 const PAUSE_LOCK = 3;
+/** 막힌 판을 자동으로 부수기 전에 잠깐 보여 주는 시간(초) */
+const STUCK_WAIT = 0.45;
 
 interface Rect { x: number; y: number; w: number; h: number }
 
@@ -207,6 +209,8 @@ export class Game {
   private emberT = 0;
   autoplay = false;
   private autoTimer = 0;
+  /** 지금 모양으로 MIN_BREAK칸 자리가 판에 없던 시간(초). 잠깐 보여 준 뒤 자동으로 부순다. */
+  private stuckT = 0;
 
   private hold: Slot;
   private now: Slot;
@@ -911,8 +915,20 @@ export class Game {
     this.onBroke(ev);
   }
 
+  /**
+   * 자동 부수기: 지금 모양으로는 판 어디에도 MIN_BREAK칸 자리가 없을 때(피버 직후 등) 색마다 가장 큰 덩어리를 부순다.
+   * 점수는 받는다(여러 색 배율·시간 보너스 없음). 모양 순서는 그대로. 서버 replay.ts의 "a"와 같다.
+   */
+  private autoBreak(): void {
+    const ev = this.board.autoBreak();
+    if (!ev) return;
+    this.record(["a", this.rules.elapsed]);
+    this.float([{ text: t("AUTO_BREAK"), size: 44, color: "#40f2ff" }], ev.ax, ev.ay - 40, false, Pop.BOUNCE);
+    this.onBroke(ev, true);
+  }
+
   /** 점수는 바로 계산하고, 화면은 단계(도장 → 연쇄 1 → 연쇄 2 …)마다 시간에 맞춰 터뜨린다. */
-  private onBroke(ev: BreakEvent): void {
+  private onBroke(ev: BreakEvent, auto = false): void {
     const tutorial = this.state === "tutorial";
     const r = this.rules.registerStamp(ev.counts, ev.colors, ev.crystalCount);
     if (tutorial) {
@@ -940,8 +956,9 @@ export class Game {
       if (r.colors >= 2) this.gaugePulse = 1;
     });
     if (r.chains > 0 || r.crystals > 0) this.gaugePulse = 1;
-    if (r.fever) {
-      // 피버 도장은 모양 순서를 쓰지 않는다
+    if (r.fever || auto) {
+      // 피버 도장·자동 부수기는 모양 순서를 쓰지 않는다
+      if (r.feverStarted && this.state === "play") this.enterFever();
       this.refreshPieces();
       return;
     }
@@ -1308,15 +1325,29 @@ export class Game {
       this.slideIn(this.now, -130);
     }
 
+    // 막힌 판: 연출이 다 끝났는데 지금 모양으로 MIN_BREAK칸 자리가 없으면 잠깐 뒤 자동으로 부순다
+    if (!this.rules.inFever && this.stampLock <= 0 && this.board.busy <= 0 && !this.board.model.hasBreak(this.current.cells, MIN_BREAK)) {
+      this.stuckT += dt;
+      if (this.stuckT >= STUCK_WAIT) {
+        this.stuckT = 0;
+        this.autoBreak();
+      }
+    } else this.stuckT = 0;
+
     this.timeWarning();
     if (this.inFever) this.feverFrame(dt);
     if (this.autoplay) {
       this.autoTimer -= dt;
       if (this.autoTimer <= 0 && this.stampLock <= 0) {
         this.autoTimer = 0.35 + Math.random() * 0.55;
-        const mv = this.bestPlan();
-        this.board.setAnchor({ x: mv.x, y: mv.y });
-        this.tryPlace({ x: mv.x, y: mv.y });
+        // 점수 1등 자리가 도장만으로는 9칸이 안 될 수 있다(연쇄로 점수가 큰 자리) → 실제로 찍히는 자리 중에서 고른다.
+        // 찍히는 자리가 없으면 기다린다(자동 부수기가 판을 바꾼다)
+        const plans = planMoves(this.board.model, this.current.cells, this.queue.peek(1)[0].cells);
+        const mv = plans.find((p) => this.feverNow || this.board.model.stampCount(p.x, p.y, this.current.cells) >= MIN_BREAK);
+        if (mv) {
+          this.board.setAnchor({ x: mv.x, y: mv.y });
+          this.tryPlace({ x: mv.x, y: mv.y });
+        }
       }
     }
     if (this.rules.isOver()) {

@@ -246,3 +246,24 @@ test("the fever song is exactly as long as fever", async () => {
   const { FEVER_TIME } = await import("../src/core/game-rules.ts");
   assert.equal(FEVER_SONG, FEVER_TIME);
 });
+
+test("dead board check and auto break take the biggest group of each color", () => {
+  // 체크무늬: 한 칸짜리 모양으로는 어디를 찍어도 1칸 → 9칸 자리가 없다
+  const checker = modelFrom(["0101", "1010", "0101", "1010"]);
+  assert.equal(checker.hasBreak([{ x: 0, y: 0 }], 9), false);
+  const big = modelFrom(["0000", "0000", "0111", "2222"]);
+  assert.equal(big.hasBreak([{ x: 0, y: 0 }], 9), true);
+  // 색 0: 세 칸 덩어리(왼쪽 위)와 한 칸 → 세 칸만. 색 1: 두 칸 → 그대로. 색 2: 한 칸 둘 → 먼저 만난 것
+  const m = modelFrom(["0012", "0112", "2010", "1220"]);
+  const cells = m.biggestGroups().map((p) => `${p.x},${p.y}`).sort();
+  const colorOf = (k: string) => { const [x, y] = k.split(",").map(Number); return m.get(x, y); };
+  // 색마다 한 덩어리만 들어 있고, 그 크기가 그 색의 가장 큰 덩어리와 같다
+  const { ids, sizes } = m.components();
+  for (let c = 0; c < 3; c++) {
+    const mine = cells.filter((k) => colorOf(k) === c);
+    const groupIds = new Set(mine.map((k) => { const [x, y] = k.split(",").map(Number); return ids[y * m.cols + x]; }));
+    assert.equal(groupIds.size, 1, `color ${c}: one group`);
+    const maxSize = Math.max(...[...ids].filter((id, i) => id >= 0 && m.cells[i] === c).map((id) => sizes[id]));
+    assert.equal(mine.length, maxSize, `color ${c}: biggest`);
+  }
+});

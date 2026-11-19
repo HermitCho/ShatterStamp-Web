@@ -292,6 +292,42 @@ export class BoardModel {
     return info.stamp.length ? this.expandCrystals(info.all).cells.length : 0;
   }
 
+  /** 이 모양으로 min칸 이상 부서지는 자리가 판에 하나라도 있나 */
+  hasBreak(offsets: Cell[], min: number): boolean {
+    for (let y = 0; y < this.rows; y++) {
+      for (let x = 0; x < this.cols; x++) if (this.stampCount(x, y, offsets) >= min) return true;
+    }
+    return false;
+  }
+
+  /** 색마다 가장 크게 뭉친 덩어리(크기가 같으면 왼쪽 위에서 먼저 만난 것). 자동 부수기가 부술 칸. */
+  biggestGroups(): Cell[] {
+    const { ids, sizes } = this.components();
+    const best = new Map<number, number>();
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      if (id < 0) continue;
+      const c = this.cells[i];
+      const cur = best.get(c);
+      if (cur === undefined || sizes[id] > sizes[cur]) best.set(c, id);
+    }
+    const keep = new Set(best.values());
+    const out: Cell[] = [];
+    for (let i = 0; i < ids.length; i++) if (keep.has(ids[i])) out.push({ x: i % this.cols, y: (i / this.cols) | 0 });
+    return out;
+  }
+
+  /**
+   * 자동 부수기: 판 어디에도 MIN_BREAK칸 자리가 없을 때 색마다 가장 큰 덩어리를 한꺼번에 부순다(연쇄까지).
+   * 점수는 받지만 여러 색 배율·시간 보너스는 없고(colors 1) 크리스탈도 생기지 않는다.
+   */
+  autoBreak(nextOffsets: Cell[] = []): Resolution | null {
+    const targets = this.biggestGroups();
+    if (targets.length === 0) return null;
+    this.fresh.fill(0);
+    return { steps: this.chainFrom(targets, targets, nextOffsets), colors: 1, colorSet: [], crystal: null };
+  }
+
   /**
    * 한 번 찍은 결과 전체: 도장 → 낙하 → 연쇄 → 낙하 … 연쇄가 멈출 때까지 보드에 적용한다.
    * 찍을 블록이 없으면 null(보드는 그대로). 미리보기는 clone()한 보드에 부른다.
@@ -300,13 +336,28 @@ export class BoardModel {
     const info = this.computeBreak(ax, ay, offsets);
     if (info.stamp.length === 0) return null;
     this.fresh.fill(0);
-    const n = this.cols * this.rows;
     // 여러 색·크리스탈 조건은 도장과 색 덩어리로 부순 칸만 센다(크리스탈이 지운 줄은 빼서 크리스탈이 크리스탈을 낳지 않게)
     const colorSet = this.colorSet(info.all);
     const colors = colorSet.length;
     const own = info.all.filter((p) => this.get(p.x, p.y) !== CRYSTAL).length;
-    let burst = this.expandCrystals(info.all);
-    let seeds = info.stamp;
+    const steps = this.chainFrom(info.all, info.stamp, nextOffsets);
+    // 여러 색(CROSS_COLORS가지 이상)이면 십자, 크게(CRYSTAL_MIN칸 이상) 부수면 부순 모양 방향의 줄 크리스탈을 찍은 자리에
+    const kind = !makeCrystal ? 0 : colors >= this.crossColors || own >= this.crossMin ? CRYSTAL_CROSS : own >= this.crystalMin ? lineKind(info.all, ax, ay) : 0;
+    let crystal: Resolution["crystal"] = null;
+    if (kind) {
+      const i = ay * this.cols + ax;
+      this.cells[i] = CRYSTAL;
+      this.crystals[i] = kind;
+      this.fresh[i] = 0;
+      crystal = { x: ax, y: ay, kind };
+    }
+    return { steps, colors, colorSet, crystal };
+  }
+
+  /** cells(옆 크리스탈 포함)를 부수고 연쇄가 멈출 때까지 단계를 쌓는다. seeds는 터지기 시작하는 칸. */
+  private chainFrom(cells: Cell[], seeds: Cell[], nextOffsets: Cell[]): Step[] {
+    const n = this.cols * this.rows;
+    let burst = this.expandCrystals(cells);
     const steps: Step[] = [];
     for (let chain = 0; ; chain++) {
       const broken = burst.cells.map((p) => ({ x: p.x, y: p.y, color: this.get(p.x, p.y) }));
@@ -319,17 +370,7 @@ export class BoardModel {
       burst = this.expandCrystals(next.cells);
       seeds = next.seeds;
     }
-    // 여러 색(CROSS_COLORS가지 이상)이면 십자, 크게(CRYSTAL_MIN칸 이상) 부수면 부순 모양 방향의 줄 크리스탈을 찍은 자리에
-    const kind = !makeCrystal ? 0 : colors >= this.crossColors || own >= this.crossMin ? CRYSTAL_CROSS : own >= this.crystalMin ? lineKind(info.all, ax, ay) : 0;
-    let crystal: Resolution["crystal"] = null;
-    if (kind) {
-      const i = ay * this.cols + ax;
-      this.cells[i] = CRYSTAL;
-      this.crystals[i] = kind;
-      this.fresh[i] = 0;
-      crystal = { x: ax, y: ay, kind };
-    }
-    return { steps, colors, colorSet, crystal };
+    return steps;
   }
 
   /**

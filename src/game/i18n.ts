@@ -84,6 +84,7 @@ const TEXT = {
   FEVER: ["FEVER 3×3", "FEVER 3×3"],
   READY: ["READY?", "READY?"],
   FEVER_END: ["FEVER END", "FEVER END"],
+  AUTO_BREAK: ["SHATTER!", "SHATTER!"],
   GO: ["GO!", "GO!"],
   POINTS_FMT: ["+%d", "+%d"],
   CELLS_FMT: ["%d칸", "%d CELLS"],

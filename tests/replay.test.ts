@@ -56,7 +56,7 @@ function playLikeClient(seed: number, opts: { tutorial?: boolean; botSeed?: numb
     holdLock = 0;
   }
 
-  let think = 0.5;
+  let think = 0.5, autos = 0;
   while (true) {
     // 프레임: 60Hz 근처로 흔들리고, 가끔 히트스톱(0.05배)이 걸린다
     const real = 1 / 60 + (rnd.next() - 0.5) * 0.006;
@@ -65,6 +65,15 @@ function playLikeClient(seed: number, opts: { tutorial?: boolean; botSeed?: numb
     if (stampLock > 0) stampLock = Math.max(0, stampLock - dt);
     if (holdLock > 0) holdLock = Math.max(0, holdLock - dt);
     if (rules.isOver()) break;
+    // 막힌 판(지금 모양으로 MIN_BREAK칸 자리가 없음): 게임처럼 자동 부수기
+    if (!rules.inFever && stampLock <= 0 && !board.hasBreak(current.cells, MIN_BREAK)) {
+      const res = board.autoBreak(queue.peek(1)[0].cells)!;
+      events.push(["a", rules.elapsed]);
+      rules.registerStamp(res.steps.map((s) => s.broken.length), res.colors, res.steps.reduce((a, s) => a + s.crystals.length, 0));
+      stampLock = STAMP_COOLDOWN;
+      autos++;
+      continue;
+    }
     think -= dt;
     if (think > 0) continue;
     think = rnd.range(0.05, 0.7);
@@ -89,14 +98,14 @@ function playLikeClient(seed: number, opts: { tutorial?: boolean; botSeed?: numb
     stampLock = STAMP_COOLDOWN + (rnd.next() < 0.5 ? 0 : 0.4 * (r.counts.length - 1));
   }
   const replay: Replay = { v: REPLAY_VERSION, tutorial, events };
-  return { replay, score: rules.score, maxCombo: rules.maxChain, biggest: rules.biggest, elapsed: rules.elapsed, fevers: rules.feverCount };
+  return { replay, score: rules.score, maxCombo: rules.maxChain, biggest: rules.biggest, elapsed: rules.elapsed, fevers: rules.feverCount, autos };
 }
 
 /** JSON으로 보내고 받은 것처럼 만든다 */
 const wire = (r: Replay): Replay => JSON.parse(JSON.stringify(r));
 
 test("server replay reproduces the client's score exactly", () => {
-  let fevers = 0;
+  let fevers = 0, autos = 0;
   for (let i = 0; i < 40; i++) {
     const seed = 1000 + i * 7919;
     const game = playLikeClient(seed, { tutorial: i % 3 === 0, botSeed: i + 1, sloppy: (i % 5) / 5 });
@@ -108,8 +117,10 @@ test("server replay reproduces the client's score exactly", () => {
     assert.equal(sim.biggest, game.biggest, `game ${i} biggest`);
     assert.ok(Math.abs(sim.duration - game.elapsed) < 0.05, `game ${i} duration ${sim.duration} vs ${game.elapsed}`);
     fevers += game.fevers;
+    autos += game.autos;
   }
   assert.ok(fevers > 0, "some games reach fever (3x3 stamps are checked too)");
+  assert.ok(autos > 0, "some games hit a dead board (auto breaks are checked too)");
 });
 
 test("a different seed gives a different result (seed binds the board)", () => {
@@ -174,4 +185,13 @@ test("holds can repeat, but only HOLD_COOLDOWN seconds apart", () => {
   assert.ok(ok.ok, !ok.ok ? ok.reason : "");
   const fast = simulateRun(99, { v: REPLAY_VERSION, tutorial: null, events: [["h", 1], ["h", 1.3]] });
   assert.ok(!fast.ok && fast.reason === "hold");
+});
+
+test("the server rejects an auto break when the board still has a 9+ spot", () => {
+  const seed = 31337;
+  const board = newBoard(seed);
+  const queue = newQueue(seed);
+  assert.ok(board.hasBreak(queue.pop().cells, MIN_BREAK), "a fresh board has a stampable spot");
+  const sim = simulateRun(seed, wire({ v: REPLAY_VERSION, tutorial: null, events: [["a", 1]] }));
+  assert.ok(!sim.ok && sim.reason === "auto");
 });

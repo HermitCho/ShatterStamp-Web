@@ -14,7 +14,7 @@ import { FEVER_SHAPE, type Shape } from "./shapes.ts";
  * 이 파일과 같은 폴더의 규칙 코드는 서버(supabase/functions/_shared/core)에 그대로 복사해 쓴다.
  * 규칙을 바꾸면 REPLAY_VERSION을 올리고 서버 함수도 다시 배포해야 한다(README 참고).
  */
-export const REPLAY_VERSION = 3;
+export const REPLAY_VERSION = 4;
 
 export const BOARD_COLS = 8;
 export const BOARD_ROWS = 9;
@@ -28,8 +28,11 @@ const MAX_TIME = 3600;
 /** 게임은 짧은 시간 조각을 여러 번 더하고, 서버는 한 번에 더한다. 그 사이의 아주 작은 소수점 오차 허용치. */
 const EPS = 1e-6;
 
-/** ["s", 게임 시간, x, y] = 찍기, ["h", 게임 시간] = 홀드. 튜토리얼 중 기록의 시간은 0이다. */
-export type ReplayEvent = ["s", number, number, number] | ["h", number];
+/**
+ * ["s", 게임 시간, x, y] = 찍기, ["h", 게임 시간] = 홀드, ["a", 게임 시간] = 자동 부수기(지금 모양으로 MIN_BREAK칸 자리가 없을 때).
+ * 튜토리얼 중 기록의 시간은 0이다(튜토리얼엔 자동 부수기가 없다).
+ */
+export type ReplayEvent = ["s", number, number, number] | ["h", number] | ["a", number];
 
 export interface Replay {
   v: number;
@@ -75,6 +78,7 @@ function parseEvents(raw: unknown, inTutorial: boolean): ReplayEvent[] | string 
     if (typeof t !== "number" || !Number.isFinite(t) || t < 0 || t > MAX_TIME) return "format";
     if (inTutorial && t !== 0) return "format";
     if (e[0] === "h" && e.length === 2) out.push(["h", t]);
+    else if (e[0] === "a" && e.length === 2 && !inTutorial) out.push(["a", t]);
     else if (e[0] === "s" && e.length === 4) {
       const [, , x, y] = e;
       if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= BOARD_COLS || y >= BOARD_ROWS) return "format";
@@ -125,7 +129,7 @@ export function simulateRun(seed: number, replay: unknown): SimResult {
       const mine = plans.find((p) => p.x === x && p.y === y);
       if (!mine || mine.points < plans[0].points) return "tutorial";
     }
-    // 본 게임은 MIN_BREAK칸 이상 부서지는 자리만 찍힌다(게임도 그런 찍기는 기록하지 않는다)
+    // 본 게임은 MIN_BREAK칸 이상 부서지는 자리만 찍힌다. 게임도 그런 찍기는 기록하지 않는다
     if (!tutorial && board.stampCount(x, y, current.cells) < MIN_BREAK) return null;
     const res = board.resolve(x, y, current.cells, next);
     if (!res) return null;
@@ -141,7 +145,7 @@ export function simulateRun(seed: number, replay: unknown): SimResult {
         if (!hold()) return fail("hold");
         continue;
       }
-      if (++stamps > TUTORIAL_STAMPS) return fail("tutorial");
+      if (e[0] === "a" || ++stamps > TUTORIAL_STAMPS) return fail("tutorial");
       const res = stamp(e[2], e[3], true);
       if (!res || res === "tutorial") return fail("tutorial");
     }
@@ -162,6 +166,14 @@ export function simulateRun(seed: number, replay: unknown): SimResult {
       // 피버 중엔 못 바꾸고, 바꾼 뒤 HOLD_COOLDOWN초 안엔 다시 못 바꾼다
       if (fever || t - lastHold < HOLD_COOLDOWN - EPS || !hold()) return fail("hold");
       lastHold = t;
+      continue;
+    }
+    if (e[0] === "a") {
+      // 게임의 autoBreak와 같다: 피버가 아니고 지금 모양으로 MIN_BREAK칸 자리가 판에 없을 때만. 모양 순서는 그대로 둔다
+      if (fever || board.hasBreak(current.cells, MIN_BREAK)) return fail("auto");
+      const res = board.autoBreak(queue.peek(1)[0].cells);
+      if (!res) return fail("auto");
+      rules.registerStamp(res.steps.map((s) => s.broken.length), res.colors, res.steps.reduce((a, s) => a + s.crystals.length, 0), t);
       continue;
     }
     if (t - lastStamp < STAMP_COOLDOWN - EPS) return fail("cooldown");

@@ -1,4 +1,4 @@
-import { BoardModel, CRYSTAL, CRYSTAL_COL, CRYSTAL_CROSS, type Step } from "../core/board-model.ts";
+import { BoardModel, CRYSTAL, CRYSTAL_COL, CRYSTAL_CROSS, type Resolution, type Step } from "../core/board-model.ts";
 import type { Cell } from "../core/shapes.ts";
 import { alpha, mix, SKIN } from "./skin.ts";
 import { ease, Tweens, type Seq } from "./tween.ts";
@@ -205,7 +205,16 @@ export class BoardView {
   /** 찍는다(연쇄까지 끝까지). 찍을 블록이 없으면 null. 보드는 바로 결과 상태가 되고, 화면은 단계별로 따라간다. */
   placeAt(cx: number, cy: number): BreakEvent | null {
     const res = this.model.resolve(cx, cy, this.offsets, this.nextOffsets, !this.fever);
-    if (!res) return null;
+    return res ? this.play(res, cx, cy) : null;
+  }
+
+  /** 자동 부수기(색마다 가장 큰 덩어리). 글자는 판 가운데에 띄운다. */
+  autoBreak(): BreakEvent | null {
+    const res = this.model.autoBreak(this.nextOffsets);
+    return res ? this.play(res, (this.model.cols - 1) / 2, (this.model.rows - 1) / 2) : null;
+  }
+
+  private play(res: Resolution, cx: number, cy: number): BreakEvent {
     const { cols } = this.model;
     // 지난 연출이 남아 있으면 끝 상태로 맞추고 새로 짠다
     this.blocks.forEach((b, i) => {
