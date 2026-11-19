@@ -154,6 +154,10 @@ export class Menus {
   result: ResultData | null = null;
   /** 결과 화면 랭킹 한 줄 (Game이 등록 결과에 맞춰 바꾼다) */
   resultRank = "";
+  /** 랭킹 줄 아래 작은 설명(오프라인 판 등) */
+  resultNote = "";
+  /** 랭킹 판 시드를 기다리는 중: 시작·다시 하기 단추 글자가 「연결 중…」이 된다 */
+  connecting = false;
   /** itch.io처럼 남의 사이트 안(iframe)에서 열리면 Google 로그인 창이 막혀서 손님으로만 쓴다 */
   readonly googleLogin = !location.hostname.endsWith("itch.zone");
   readonly rank: RankView = { mode: "all", status: "off", nickname: null, guest: false, guestsRanked: true, all: [], mine: [], myRank: null };
@@ -189,7 +193,7 @@ export class Menus {
         dim: 0,
         widgets: [
           // 큰 단추는 시작·랭킹 둘만. 게임 방법(튜토리얼 포함)과 설정은 위 구석의 작은 그림 단추로
-          { ...btn(576, "START", () => this.actions.start(), true), width: 360 },
+          { ...btn(576, "START", () => this.actions.start(), true), label: () => t(this.connecting ? "CONNECTING" : "START"), width: 360 },
           { ...btn(698, "RANKING", () => this.openRanking()), width: 360 },
           { kind: "button", y: 30, x: 76, label: () => t("HOW_TO_PLAY"), icon: "help", onPress: () => this.open("howto") },
           { kind: "button", y: 30, x: 644, label: () => t("SETTINGS"), icon: "gear", onPress: () => this.openSettings("title") },
@@ -307,7 +311,7 @@ export class Menus {
       },
       result: {
         dim: 0.86,
-        widgets: [btn(1052, "RETRY", () => this.actions.restart(), true), btn(1160, "TITLE", () => this.actions.toTitle())],
+        widgets: [{ ...btn(1052, "RETRY", () => this.actions.restart(), true), label: () => t(this.connecting ? "CONNECTING" : "RETRY") }, btn(1160, "TITLE", () => this.actions.toTitle())],
         draw: (g) => this.drawResult(g),
       },
     };
@@ -789,7 +793,8 @@ export class Menus {
     look.lettering(g, t("BEST_FMT", r.best.toLocaleString()), 360, 484, 36, 600, SKIN.timeText);
     if (this.resultRank) {
       // Long service messages wrap at a readable size instead of shrinking.
-      wrapText(g, this.resultRank, 360, 542, 600, 30, 38, SKIN.accent, "center");
+      const h = wrapText(g, this.resultRank, 360, 542, 600, 30, 38, SKIN.accent, "center");
+      if (this.resultNote) wrapText(g, this.resultNote, 360, 542 + h - 4, 600, 22, 28, SKIN.muted, "center");
     }
     g.restore();
     if (an.stamp > 0) this.drawBestStamp(g, an.stamp, an.stampScale, r.score);

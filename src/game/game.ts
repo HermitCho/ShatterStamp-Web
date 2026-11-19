@@ -71,6 +71,8 @@ const Pop = { BIG: 0, BOUNCE: 1, PLAIN: 2, DROP: 3 } as const;
 const FLOOR_Y = 1078;
 /** 이어하기 뒤 다시 멈출 수 있기까지의 시간(초). 멈춤·이어하기를 반복해 생각할 시간을 버는 꼼수를 줄인다. */
 const PAUSE_LOCK = 3;
+/** 시작할 때 서버 시드를 기다리는 최대 시간(초). 넘으면 오프라인 판으로 시작한다. */
+const START_WAIT = 6;
 /** 막힌 판을 자동으로 부수기 전에 잠깐 보여 주는 시간(초) */
 const STUCK_WAIT = 0.45;
 
@@ -182,6 +184,10 @@ export class Game {
   private lastAccount: string | null = null;
   /** 이 페이지에서 손님 계정 만들기를 이미 해 봤는지 (실패해도 계속 다시 묻지 않는다) */
   private guestTried = false;
+  /** 손님 계정을 만드는 중(사람 확인 포함) */
+  private guestPending = false;
+  /** 손님 계정 만들기가 실패했다(사람 확인 실패·연결 끊김). 다음 시작 때 다시 해 본다. */
+  private guestFailed = false;
   /** 판 기록을 보내는 중 (그동안 맡겨 둔 판을 또 보내지 않는다) */
   private submitting = false;
   /** 닉네임 정하기 창을 이번 접속에서 결과 화면에 띄운 적 있는지 */
@@ -211,6 +217,10 @@ export class Game {
   private autoTimer = 0;
   /** 지금 모양으로 MIN_BREAK칸 자리가 판에 없던 시간(초). 잠깐 보여 준 뒤 자동으로 부순다. */
   private stuckT = 0;
+  /** 이번 판이 랭킹에 안 올라가는 판인가(서버 시드 없이 시작). 판 도중 위에 작게 알린다. */
+  private unranked = false;
+  /** 시드를 기다리는 시작 요청 */
+  private waitStart: { until: number; tutorial: boolean; panel: string | null } | null = null;
 
   private hold: Slot;
   private now: Slot;
@@ -238,13 +248,10 @@ export class Game {
       this.trauma = Math.min(1, this.trauma + 0.35);
     };
     this.menus = new Menus({
-      start: () => this.start(),
-      tutorial: () => {
-        this.forceTutorial = true;
-        this.start();
-      },
+      start: () => this.requestStart(),
+      tutorial: () => this.requestStart(true),
       resume: () => this.resume(),
-      restart: () => this.start(),
+      restart: () => this.requestStart(),
       toTitle: () => this.toTitle(),
       settingsChanged: (s) => this.applySettings(s),
       click: () => {
@@ -288,10 +295,9 @@ export class Game {
     }
   }
 
-  /** 화면에 보여 줄 최고 점수: Google 계정이면 계정 기록, 손님이면 계정과 이 기기 중 높은 쪽, 계정이 없으면 이 기기 기록 */
+  /** 화면에 보여 줄 최고 점수: 계정(손님 포함)이 있으면 서버에 올라간 계정 기록(랭킹과 같다), 계정이 없으면 이 기기 기록 */
   private get best(): number {
     if (this.online.nickname === null) return this.localBest;
-    if (this.online.guest) return Math.max(this.localBest, this.accountBest ?? 0);
     return this.accountBest ?? 0;
   }
 
@@ -330,7 +336,7 @@ export class Game {
     // 처음 온 사람: 손님 계정을 만들어 첫 판부터 기록이 남게 한다(첫 화면은 가볍게 두려고 첫 입력 뒤에)
     if (!this.guestTried && !this.autoplay && this.online.configured && this.online.nickname === null) {
       this.guestTried = true;
-      void this.online.ensureGuest();
+      this.tryGuest();
     }
     if (!this.gate) return;
     this.gate = false;
@@ -500,9 +506,15 @@ export class Game {
   /** 판이 끝났을 때 랭킹 등록. 서버가 기록을 다시 돌려 계산한 점수만 올라간다. */
   private submitScore(): void {
     this.menus.resultRank = "";
+    this.menus.resultNote = "";
     if (!this.rankable()) return;
     if (this.online.nickname === null) {
-      this.menus.resultRank = t("RESULT_RANK_GUEST");
+      // itch 안에서는 Google 로그인을 못 하므로 「로그인하면」 대신 연결 안내
+      if (this.menus.googleLogin) this.menus.resultRank = t("RESULT_RANK_GUEST");
+      else {
+        this.menus.resultRank = t("RESULT_RANK_NOCONN");
+        this.menus.resultNote = t("RESULT_NOTE_NOCONN");
+      }
       return;
     }
     const tk = this.ticket;
@@ -510,6 +522,7 @@ export class Game {
     if (!tk) {
       // 판을 시작할 때 서버 표를 못 받았다(연결 실패 등)
       this.menus.resultRank = t("RESULT_RANK_UNRANKED");
+      this.menus.resultNote = t("RESULT_NOTE_UNRANKED");
       this.prepareRun();
       return;
     }
@@ -625,6 +638,49 @@ export class Game {
 
   // ---------------------------------------------------------------- 흐름
 
+  /**
+   * 시작 단추: 랭킹 판인데 서버 시드(표)가 아직 없으면(게임을 막 열었거나 지난 판 기록을 올리는 중) 받을 때까지
+   * 잠깐 기다렸다 시작한다. 못 받으면 START_WAIT 뒤에 오프라인 판으로 시작한다.
+   */
+  private requestStart(tutorial = false): void {
+    if (this.waitStart) return;
+    // 손님 계정을 못 만들었으면 시작할 때마다 다시 연결해 본다(새로고침 없이)
+    if (this.guestFailed && !this.guestPending && this.online.account === null && this.rankable()) this.tryGuest();
+    if (this.nextTicket && Date.now() - this.nextTicket.at >= TICKET_MAX_AGE) this.nextTicket = null;
+    // 손님 계정을 만드는 중이면 그것도 기다린다(만들어지면 시드를 받는다)
+    if (this.nextTicket || !this.rankable() || (this.online.account === null && !this.guestPending)) {
+      this.forceTutorial = tutorial;
+      this.start();
+      return;
+    }
+    this.waitStart = { until: performance.now() + START_WAIT * 1000, tutorial, panel: this.menus.current };
+    this.menus.connecting = true;
+    this.prepareRun();
+  }
+
+  private tryGuest(): void {
+    this.guestPending = true;
+    this.guestFailed = false;
+    void this.online.ensureGuest().finally(() => {
+      this.guestPending = false;
+      this.guestFailed = this.online.account === null;
+    });
+  }
+
+  /** 기다리던 시드가 왔거나 시간이 다 됐으면 시작한다. 그 사이 다른 화면으로 갔으면 그만둔다. */
+  private checkWaitStart(): void {
+    const w = this.waitStart;
+    if (!w) return;
+    const moved = this.menus.current !== w.panel || (this.state !== "title" && this.state !== "result");
+    const noAccount = this.online.account === null && !this.guestPending;
+    if (!moved && !this.nextTicket && !noAccount && performance.now() < w.until) return;
+    this.waitStart = null;
+    this.menus.connecting = false;
+    if (moved) return;
+    this.forceTutorial = w.tutorial;
+    this.start();
+  }
+
   start(): void {
     this.run++;
     this.intro = 0;
@@ -638,6 +694,7 @@ export class Game {
     const tk = this.nextTicket && Date.now() - this.nextTicket.at < TICKET_MAX_AGE ? this.nextTicket : null;
     this.nextTicket = null;
     this.ticket = this.rankable() ? tk : null;
+    this.unranked = this.rankable() && !this.ticket;
     const seed = (this.seed = this.ticket?.seed ?? localSeed());
     this.board.setModel(newBoard(seed));
     this.queue = newQueue(seed);
@@ -811,7 +868,9 @@ export class Game {
       });
     });
     const r = this.rules;
-    const newBest = r.score > this.best && !this.autoplay;
+    // 계정이 있는데 서버 시드 없이 한 판(오프라인 판)은 랭킹에 안 올라가므로 신기록으로 치지 않는다
+    const ranked = this.online.nickname === null || this.ticket !== null;
+    const newBest = ranked && r.score > this.best && !this.autoplay;
     if (r.score > this.localBest && !this.autoplay) {
       this.localBest = r.score;
       try {
@@ -1299,6 +1358,7 @@ export class Game {
     for (const m of this.misses) m.t += realDt;
     this.misses = this.misses.filter((m) => m.t < MISS_TIME);
     this.menus.update(realDt);
+    this.checkWaitStart();
     this.stage.update(dt);
     this.title.update(realDt);
     this.tutorial.update(realDt);
@@ -1505,6 +1565,10 @@ export class Game {
     g.restore();
     text(g, t("BEST"), 360, 62, 24, SKIN.muted, "center");
     fitText(g, Math.max(this.best, 0).toLocaleString(), 360, 124, 32, 170, SKIN.muted, "center");
+    if (this.unranked) {
+      // 오프라인 판: 끝나고 나서야 알지 않게 판 내내 작게 알린다
+      fitText(g, t("HUD_UNRANKED"), 360, 152, 17, 210, alpha(SKIN.warn, 0.85), "center");
+    }
     text(g, t("SCORE"), 48, 62, 26, SKIN.score, "left");
     g.save();
     const sp = this.scorePulse;
